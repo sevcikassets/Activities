@@ -211,7 +211,7 @@ def list_time_entries(
         )
         .join(models.Project, models.Project.id == models.TimeEntry.project_id, isouter=True)
         .join(models.Ticket, models.Ticket.id == models.TimeEntry.ticket_id, isouter=True)
-        .order_by(models.TimeEntry.spent_on.desc(), models.TimeEntry.started_at.desc().nullslast())
+        .order_by(models.TimeEntry.spent_on.desc(), models.TimeEntry.started_at.asc().nullslast())
         .limit(min(limit, 500))
     )
     if date_from:
