@@ -336,7 +336,7 @@ h2 {
   align-items: end;
   display: grid;
   gap: 10px;
-  grid-template-columns: 150px 150px minmax(170px, 1fr) 150px minmax(170px, 1fr) auto;
+  grid-template-columns: 150px 150px minmax(170px, 1fr) 150px minmax(170px, 1fr) auto auto;
   margin-bottom: 12px;
 }
 
@@ -703,6 +703,11 @@ td {
 
 .descriptionCell {
   min-width: 360px;
+}
+
+.rowActions {
+  display: flex;
+  gap: 6px;
 }
 
 @media (max-width: 1050px) {

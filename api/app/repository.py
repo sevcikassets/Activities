@@ -162,6 +162,52 @@ def calculate_overlap_hours(db: Session, payload: TimeEntryCreate) -> Decimal:
     return Decimal(str(round(overlap_minutes / 60, 2)))
 
 
+def calculate_overlap_hours_for_entry(db: Session, entry_id, payload: TimeEntryCreate) -> Decimal:
+    if not payload.started_at or not payload.ended_at:
+        return Decimal("0")
+
+    def to_minutes(value: time) -> int:
+        return value.hour * 60 + value.minute
+
+    start = to_minutes(payload.started_at)
+    end = to_minutes(payload.ended_at)
+    if end < start:
+        end += 24 * 60
+
+    intervals: list[tuple[int, int]] = []
+    existing_entries = db.scalars(
+        select(models.TimeEntry).where(
+            models.TimeEntry.id != entry_id,
+            models.TimeEntry.spent_on == payload.spent_on,
+            models.TimeEntry.started_at.is_not(None),
+            models.TimeEntry.ended_at.is_not(None),
+        )
+    ).all()
+    for entry in existing_entries:
+        existing_start = to_minutes(entry.started_at)
+        existing_end = to_minutes(entry.ended_at)
+        if existing_end < existing_start:
+            existing_end += 24 * 60
+        overlap_start = max(start, existing_start)
+        overlap_end = min(end, existing_end)
+        if overlap_end > overlap_start:
+            intervals.append((overlap_start, overlap_end))
+
+    if not intervals:
+        return Decimal("0")
+
+    intervals.sort()
+    merged: list[list[int]] = []
+    for interval_start, interval_end in intervals:
+        if not merged or interval_start > merged[-1][1]:
+            merged.append([interval_start, interval_end])
+        else:
+            merged[-1][1] = max(merged[-1][1], interval_end)
+
+    overlap_minutes = sum(interval_end - interval_start for interval_start, interval_end in merged)
+    return Decimal(str(round(overlap_minutes / 60, 2)))
+
+
 def create_time_entry(db: Session, payload: TimeEntryCreate, source: str = "manual") -> models.TimeEntry:
     project = get_or_create_project(db, payload.project_name)
     ticket = get_or_create_ticket(db, payload.ticket_external_id, project)
@@ -188,6 +234,46 @@ def create_time_entry(db: Session, payload: TimeEntryCreate, source: str = "manu
         raw_text=payload.raw_text,
     )
     db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def update_time_entry(db: Session, entry_id, payload: TimeEntryCreate) -> models.TimeEntry | None:
+    entry = db.scalar(
+        select(models.TimeEntry)
+        .options(
+            joinedload(models.TimeEntry.project),
+            joinedload(models.TimeEntry.ticket),
+            joinedload(models.TimeEntry.transport),
+        )
+        .where(models.TimeEntry.id == entry_id)
+    )
+    if not entry:
+        return None
+
+    project = get_or_create_project(db, payload.project_name)
+    ticket = get_or_create_ticket(db, payload.ticket_external_id, project)
+    if ticket is None:
+        ticket = find_valid_overhead_ticket(db, payload.project_name, payload.spent_on, payload.started_at)
+    category_code = get_or_create_category(db, payload.category_code or infer_category_code(payload.project_name))
+    transport = get_or_create_transport(db, payload.transport_name)
+
+    entry.spent_on = payload.spent_on
+    entry.started_at = payload.started_at
+    entry.ended_at = payload.ended_at
+    entry.duration_hours = payload.duration_hours
+    entry.category_code = category_code
+    entry.description = payload.description
+    entry.ticket_id = ticket.id if ticket else None
+    entry.project_id = project.id if project else None
+    entry.transport_id = transport.id if transport else None
+    entry.km = payload.km
+    entry.overlap_hours = calculate_overlap_hours_for_entry(db, entry_id, payload)
+    entry.redmine_time = payload.redmine_time
+    entry.reported_status = payload.reported_status
+    entry.raw_text = payload.raw_text
+    entry.updated_at = datetime.now()
     db.commit()
     db.refresh(entry)
     return entry

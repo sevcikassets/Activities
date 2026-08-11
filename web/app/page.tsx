@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, CheckSquare, Copy, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Users } from "lucide-react";
+import { BarChart3, CheckSquare, Copy, Download, Edit3, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Users, X } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -323,6 +323,7 @@ export default function Home() {
   const [bulkValidTo, setBulkValidTo] = useState("");
   const [textEntry, setTextEntry] = useState("");
   const [voiceText, setVoiceText] = useState("");
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [selectedActivityIds, setSelectedActivityIds] = useState<string[]>([]);
   const [bulkCopyDate, setBulkCopyDate] = useState(today());
   const [message, setMessage] = useState("");
@@ -379,6 +380,20 @@ export default function Home() {
     return {
       ...(extra ?? {}),
       Authorization: `Bearer ${token}`
+    };
+  }
+
+  function entryPayload(value: EntryDraft) {
+    return {
+      ...value,
+      started_at: value.started_at || null,
+      ended_at: value.ended_at || null,
+      category_code: value.category_code || null,
+      ticket_external_id: value.ticket_external_id || null,
+      project_name: value.project_name || null,
+      transport_name: value.transport_name || null,
+      km: value.km || null,
+      reported_status: value.reported_status || null
     };
   }
 
@@ -501,26 +516,17 @@ export default function Home() {
 
   async function saveEntry(event?: FormEvent) {
     event?.preventDefault();
-    const response = await apiFetch("/time-entries", {
-      method: "POST",
+    const response = await apiFetch(editingEntryId ? `/time-entries/${editingEntryId}` : "/time-entries", {
+      method: editingEntryId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...draft,
-        started_at: draft.started_at || null,
-        ended_at: draft.ended_at || null,
-        category_code: draft.category_code || null,
-        ticket_external_id: draft.ticket_external_id || null,
-        project_name: draft.project_name || null,
-        transport_name: draft.transport_name || null,
-        km: draft.km || null,
-        reported_status: draft.reported_status || null
-      })
+      body: JSON.stringify(entryPayload(draft))
     });
     if (!response.ok) {
       setMessage("Zaznam se nepodarilo ulozit.");
       return;
     }
-    setMessage("Zaznam ulozen.");
+    setMessage(editingEntryId ? "Zaznam upraven." : "Zaznam ulozen.");
+    setEditingEntryId(null);
     setDraft({ ...emptyDraft, spent_on: draft.spent_on });
     setTextEntry("");
     await Promise.all([loadActivities(), loadStats(), loadCategoryComparison()]);
@@ -566,6 +572,24 @@ export default function Home() {
   async function applyFilters(event: FormEvent) {
     event.preventDefault();
     await loadActivities(filters);
+  }
+
+  async function exportActivities() {
+    const query = buildQuery(filters);
+    const response = await apiFetch(`/time-entries/export.xlsx?${query}`);
+    if (!response.ok) {
+      setMessage("Export se nepodarilo vytvorit.");
+      return;
+    }
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `aktivity-${today()}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   }
 
   async function applyStatsPeriod(event: FormEvent) {
@@ -691,6 +715,7 @@ export default function Home() {
   }
 
   function copyRow(row: ActivityRow) {
+    setEditingEntryId(null);
     setDraft({
       spent_on: row.spent_on,
       started_at: timeValue(row.started_at),
@@ -705,6 +730,29 @@ export default function Home() {
       reported_status: row.reported_status ?? ""
     });
     switchSection("activities");
+  }
+
+  function editRow(row: ActivityRow) {
+    setEditingEntryId(row.id);
+    setDraft({
+      spent_on: row.spent_on,
+      started_at: timeValue(row.started_at),
+      ended_at: timeValue(row.ended_at),
+      duration_hours: row.duration_hours,
+      category_code: row.category_code ?? "",
+      description: row.description,
+      ticket_external_id: row.ticket_external_id ?? "",
+      project_name: row.project_name ?? "",
+      transport_name: row.transport_name ?? "",
+      km: row.km ?? "",
+      reported_status: row.reported_status ?? ""
+    });
+    switchSection("activities");
+  }
+
+  function cancelEdit() {
+    setEditingEntryId(null);
+    setDraft({ ...emptyDraft, spent_on: draft.spent_on });
   }
 
   const visibleSections = sections.filter((item) => !item.adminOnly || currentUser?.role === "admin");
@@ -815,7 +863,7 @@ export default function Home() {
             <section className="workspace">
               <form className="panel entryPanel" onSubmit={saveEntry}>
                 <div className="panelHeader">
-                  <h2>Novy zaznam</h2>
+                  <h2>{editingEntryId ? "Uprava zaznamu" : "Novy zaznam"}</h2>
                   <Save size={18} />
                 </div>
 
@@ -849,8 +897,9 @@ export default function Home() {
                   {transportOptions.map((transport) => <option key={transport} value={transport} />)}
                 </datalist>
                 <label>Popis<textarea value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label>
-                <div className="actions">
-                  <button type="submit"><Save size={18} /> Ulozit</button>
+              <div className="actions">
+                  <button type="submit"><Save size={18} /> {editingEntryId ? "Ulozit zmeny" : "Ulozit"}</button>
+                  {editingEntryId && <button type="button" className="secondary" onClick={cancelEdit}><X size={18} /> Zrusit upravu</button>}
                 </div>
               </form>
 
@@ -879,6 +928,7 @@ export default function Home() {
                 <label>Tiket<input value={filters.ticket} onChange={(e) => setFilters({ ...filters, ticket: e.target.value })} /></label>
                 <label>Text<input value={filters.text} onChange={(e) => setFilters({ ...filters, text: e.target.value })} /></label>
                 <button type="submit"><Search size={18} /> Filtrovat</button>
+                <button type="button" className="secondary" onClick={exportActivities}><Download size={18} /> Excel</button>
               </form>
               <form className="bulkCopyForm" onSubmit={bulkCopyActivities}>
                 <label>Kopirovat na<input type="date" value={bulkCopyDate} onChange={(event) => setBulkCopyDate(event.target.value)} /></label>
@@ -913,7 +963,10 @@ export default function Home() {
                             <td>{row.transport_name}</td>
                             <td>{formatKm(row.km)}</td>
                             <td className="descriptionCell">{row.description}</td>
-                            <td><button className="iconButton secondary" onClick={() => copyRow(row)} title="Kopirovat radek"><Copy size={16} /></button></td>
+                            <td className="rowActions">
+                              <button className="iconButton secondary" onClick={() => editRow(row)} title="Upravit radek"><Edit3 size={16} /></button>
+                              <button className="iconButton secondary" onClick={() => copyRow(row)} title="Kopirovat radek"><Copy size={16} /></button>
+                            </td>
                           </tr>
                         ))}
                         <tr className="subtotalRow">

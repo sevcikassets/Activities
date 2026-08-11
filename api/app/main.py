@@ -1,9 +1,13 @@
 from pathlib import Path
 from decimal import Decimal
+from io import BytesIO
 from tempfile import NamedTemporaryFile
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app import models
@@ -21,6 +25,7 @@ from app.repository import (
     parse_text_entry,
     period_summary,
     project_summary,
+    update_time_entry,
     update_overhead_ticket_validity,
 )
 from app.schemas import (
@@ -170,6 +175,86 @@ def get_time_entries(
         serialize_entry(entry)
         for entry in list_time_entries(db, parsed_from, parsed_to, project, ticket, text, limit)
     ]
+
+
+@app.put("/time-entries/{entry_id}", response_model=TimeEntryOut)
+def edit_time_entry(
+    entry_id: UUID,
+    payload: TimeEntryCreate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> TimeEntryOut:
+    entry = update_time_entry(db, entry_id, payload)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Time entry not found.")
+    return serialize_entry(entry)
+
+
+@app.get("/time-entries/export.xlsx")
+def export_time_entries(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    project: str | None = None,
+    ticket: str | None = None,
+    text: str | None = None,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_user),
+) -> StreamingResponse:
+    from datetime import date
+
+    parsed_from = date.fromisoformat(date_from) if date_from else None
+    parsed_to = date.fromisoformat(date_to) if date_to else None
+    rows = [serialize_entry(entry) for entry in list_time_entries(db, parsed_from, parsed_to, project, ticket, text, 500)]
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Aktivity"
+    sheet.append([
+        "Datum",
+        "Den",
+        "Od",
+        "Do",
+        "Zadano",
+        "Prekryv",
+        "Skutecne",
+        "Kategorie",
+        "Tiket",
+        "Zakazka",
+        "Doprava",
+        "km",
+        "Popis",
+        "Zapsano",
+    ])
+    weekdays = ["Po", "Ut", "St", "Ct", "Pa", "So", "Ne"]
+    for row in rows:
+        sheet.append([
+            row.spent_on.isoformat(),
+            weekdays[row.spent_on.weekday()],
+            row.started_at.strftime("%H:%M") if row.started_at else "",
+            row.ended_at.strftime("%H:%M") if row.ended_at else "",
+            float(row.duration_hours),
+            float(row.overlap_hours or 0),
+            float(row.effective_hours),
+            row.category_code or "",
+            row.ticket_external_id or "",
+            row.project_name or "",
+            row.transport_name or "",
+            float(row.km) if row.km is not None else "",
+            row.description,
+            row.reported_status or "",
+        ])
+    for column in sheet.columns:
+        max_length = max(len(str(cell.value or "")) for cell in column)
+        sheet.column_dimensions[column[0].column_letter].width = min(max(max_length + 2, 10), 60)
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="aktivity.xlsx"'},
+    )
 
 
 @app.post("/time-entries/parse-text", response_model=TextEntryParseResponse)
