@@ -1,0 +1,71 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - activities-db:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  api:
+    build:
+      context: ./api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      API_CORS_ORIGINS: https://${ACTIVITIES_HOST}
+      APP_USERNAME: ${APP_USERNAME}
+      APP_PASSWORD: ${APP_PASSWORD}
+      APP_TOKEN_SECRET: ${APP_TOKEN_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.activities-api.rule=Host(`${ACTIVITIES_HOST}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.activities-api.entrypoints=websecure"
+      - "traefik.http.routers.activities-api.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.activities-api-strip.stripprefix.prefixes=/api"
+      - "traefik.http.routers.activities-api.middlewares=activities-api-strip"
+      - "traefik.http.services.activities-api.loadbalancer.server.port=8000"
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: https://${ACTIVITIES_HOST}/api
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: https://${ACTIVITIES_HOST}/api
+    depends_on:
+      - api
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.activities-web.rule=Host(`${ACTIVITIES_HOST}`)"
+      - "traefik.http.routers.activities-web.entrypoints=websecure"
+      - "traefik.http.routers.activities-web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.activities-web.loadbalancer.server.port=3000"
+
+volumes:
+  activities-db:
+
+networks:
+  internal:
+  proxy:
+    external: true
+    name: proxy

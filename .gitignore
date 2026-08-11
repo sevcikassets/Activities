@@ -1,0 +1,17 @@
+.env
+.env.local
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+build/
+.next/
+*.pyc
+*.log
+*.sqlite
+uploads/*
+!uploads/.gitkeep
+exports/*
+!exports/.gitkeep
+

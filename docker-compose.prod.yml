@@ -1,0 +1,36 @@
+services:
+  db:
+    restart: unless-stopped
+
+  api:
+    restart: unless-stopped
+    networks:
+      - default
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.activities-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.activities-api.entrypoints=websecure"
+      - "traefik.http.routers.activities-api.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.activities-api-strip.stripprefix.prefixes=/api"
+      - "traefik.http.routers.activities-api.middlewares=activities-api-strip"
+      - "traefik.http.services.activities-api.loadbalancer.server.port=8000"
+
+  web:
+    restart: unless-stopped
+    networks:
+      - default
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.activities.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.activities.entrypoints=websecure"
+      - "traefik.http.routers.activities.tls.certresolver=letsencrypt"
+      - "traefik.http.services.activities.loadbalancer.server.port=3000"
+
+networks:
+  proxy:
+    external: true
+    name: proxy
