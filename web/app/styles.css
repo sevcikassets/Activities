@@ -337,6 +337,27 @@ h2 {
   padding: 10px;
 }
 
+.bulkCopyForm {
+  align-items: end;
+  background: #f8fafc;
+  border: 1px solid #e0e6ee;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 170px auto auto;
+  justify-content: start;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.bulkInfo {
+  align-items: center;
+  color: #46546a;
+  display: inline-flex;
+  font-size: 13px;
+  min-height: 38px;
+}
+
 .statsFilters {
   align-items: end;
   display: grid;
@@ -384,6 +405,11 @@ input, textarea, select {
   min-height: 38px;
   padding: 8px 10px;
   width: 100%;
+}
+
+th input[type="checkbox"], td input[type="checkbox"] {
+  min-height: 0;
+  width: auto;
 }
 
 textarea {
@@ -654,7 +680,7 @@ td {
 }
 
 @media (max-width: 1050px) {
-  .workspace, .statsOnly, .filterBar, .gridForm, .quickEntry, .summaryGrid, .statsDrilldown, .statsFilters, .categoryCards, .smallCharts, .userForm, .overheadFilters, .bulkValidityForm {
+  .workspace, .statsOnly, .filterBar, .gridForm, .quickEntry, .summaryGrid, .statsDrilldown, .statsFilters, .categoryCards, .smallCharts, .userForm, .overheadFilters, .bulkValidityForm, .bulkCopyForm {
     grid-template-columns: 1fr;
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Copy, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Users } from "lucide-react";
+import { BarChart3, CheckSquare, Copy, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Users } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -193,6 +193,12 @@ function formatKm(value: string | null) {
   return Math.round(Number(value)).toString();
 }
 
+function weekdayName(value: string) {
+  const names = ["Ne", "Po", "Ut", "St", "Ct", "Pa", "So"];
+  const date = new Date(`${value}T12:00:00`);
+  return names[date.getDay()] ?? "";
+}
+
 function buildQuery(params: Record<string, string>) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -317,6 +323,8 @@ export default function Home() {
   const [bulkValidTo, setBulkValidTo] = useState("");
   const [textEntry, setTextEntry] = useState("");
   const [voiceText, setVoiceText] = useState("");
+  const [selectedActivityIds, setSelectedActivityIds] = useState<string[]>([]);
+  const [bulkCopyDate, setBulkCopyDate] = useState(today());
   const [message, setMessage] = useState("");
   const [token, setToken] = useState("");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -362,6 +370,10 @@ export default function Home() {
     const values = categoryPeriods.flatMap((row) => categorySeries.map((series) => Number(row[series.key] || 0)));
     return Math.max(1, ...values);
   }, [categoryPeriods]);
+  const selectedActivities = useMemo(
+    () => activities.filter((row) => selectedActivityIds.includes(row.id)),
+    [activities, selectedActivityIds]
+  );
 
   function authHeaders(extra?: HeadersInit): HeadersInit {
     return {
@@ -386,6 +398,7 @@ export default function Home() {
     const query = buildQuery({ ...nextFilters, limit: "200" });
     const response = await apiFetch(`/time-entries?${query}`);
     setActivities(await response.json());
+    setSelectedActivityIds([]);
   }
 
   async function loadStats(dateFrom = statsDateFrom, dateTo = statsDateTo) {
@@ -563,6 +576,50 @@ export default function Home() {
   async function applyOverheadFilters(event?: FormEvent) {
     event?.preventDefault();
     await loadOverheadTickets(overheadProject, overheadCurrentOnly ? today() : overheadActiveOn);
+  }
+
+  function toggleActivitySelection(id: string) {
+    setSelectedActivityIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  }
+
+  function toggleAllVisibleActivities(checked: boolean) {
+    setSelectedActivityIds(checked ? activities.map((row) => row.id) : []);
+  }
+
+  async function bulkCopyActivities(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedActivities.length) {
+      setMessage("Nejsou vybrane zadne aktivity ke kopirovani.");
+      return;
+    }
+    for (const row of selectedActivities) {
+      const response = await apiFetch("/time-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spent_on: bulkCopyDate,
+          started_at: timeValue(row.started_at) || null,
+          ended_at: timeValue(row.ended_at) || null,
+          duration_hours: row.duration_hours,
+          category_code: row.category_code,
+          description: row.description,
+          ticket_external_id: row.ticket_external_id,
+          project_name: row.project_name,
+          transport_name: row.transport_name,
+          km: row.km,
+          reported_status: row.reported_status
+        })
+      });
+      if (!response.ok) {
+        setMessage("Hromadne kopirovani se nepodarilo dokoncit.");
+        return;
+      }
+    }
+    setMessage(`Zkopirovano ${selectedActivities.length} aktivit na ${bulkCopyDate}.`);
+    setSelectedActivityIds([]);
+    await Promise.all([loadActivities(), loadStats(), loadCategoryComparison()]);
   }
 
   async function bulkUpdateOverheadValidity(event: FormEvent) {
@@ -819,18 +876,28 @@ export default function Home() {
                 <label>Text<input value={filters.text} onChange={(e) => setFilters({ ...filters, text: e.target.value })} /></label>
                 <button type="submit"><Search size={18} /> Filtrovat</button>
               </form>
+              <form className="bulkCopyForm" onSubmit={bulkCopyActivities}>
+                <label>Kopirovat na<input type="date" value={bulkCopyDate} onChange={(event) => setBulkCopyDate(event.target.value)} /></label>
+                <span className="bulkInfo">Vybrano {selectedActivityIds.length}</span>
+                <button type="submit"><CheckSquare size={18} /> Zkopirovat vybrane</button>
+              </form>
 
               <div className="tableWrap">
                 <table>
                   <thead>
-                    <tr><th>Datum</th><th>Od</th><th>Do</th><th>Zadano</th><th>Prekryv</th><th>Skutecne</th><th>Kat.</th><th>Tiket</th><th>Zakazka</th><th>Doprava</th><th>km</th><th>Popis</th><th></th></tr>
+                    <tr>
+                      <th><input type="checkbox" checked={activities.length > 0 && selectedActivityIds.length === activities.length} onChange={(event) => toggleAllVisibleActivities(event.target.checked)} /></th>
+                      <th>Datum</th><th>Den</th><th>Od</th><th>Do</th><th>Zadano</th><th>Prekryv</th><th>Skutecne</th><th>Kat.</th><th>Tiket</th><th>Zakazka</th><th>Doprava</th><th>km</th><th>Popis</th><th></th>
+                    </tr>
                   </thead>
                   <tbody>
                     {groupedActivities.map((group) => (
                       <Fragment key={group.date}>
                         {group.rows.map((row) => (
                           <tr key={row.id}>
+                            <td><input type="checkbox" checked={selectedActivityIds.includes(row.id)} onChange={() => toggleActivitySelection(row.id)} /></td>
                             <td>{row.spent_on}</td>
+                            <td>{weekdayName(row.spent_on)}</td>
                             <td>{timeValue(row.started_at)}</td>
                             <td>{timeValue(row.ended_at)}</td>
                             <td>{row.duration_hours}</td>
@@ -846,7 +913,7 @@ export default function Home() {
                           </tr>
                         ))}
                         <tr className="subtotalRow">
-                          <td colSpan={3}>Soucet dne {group.date}</td>
+                          <td colSpan={5}>Soucet dne {group.date} ({weekdayName(group.date)})</td>
                           <td>{group.hours}</td>
                           <td></td>
                           <td>{group.effectiveHours}</td>
