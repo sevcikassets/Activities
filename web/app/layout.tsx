@@ -4,7 +4,10 @@ import "./styles.css";
 
 export const metadata: Metadata = {
   title: "Activities",
-  description: "Evidence odpracovane doby"
+  description: "Evidence odpracovane doby, aktivit a rezijnich tiketu",
+  icons: {
+    icon: "/icon.svg"
+  }
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

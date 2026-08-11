@@ -40,6 +40,32 @@ button, input, textarea, select {
   width: min(420px, 100%);
 }
 
+.loginBrand {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.loginBrandIcon {
+  align-items: center;
+  background: #15616d;
+  border-radius: 12px;
+  color: #ffffff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 28px;
+  font-weight: 700;
+  height: 54px;
+  justify-content: center;
+  width: 54px;
+}
+
+.loginIntro {
+  color: #46546a;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .appShell {
   background: #f4f6f8;
   display: grid;

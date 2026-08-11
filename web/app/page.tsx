@@ -713,10 +713,14 @@ export default function Home() {
     return (
       <main className="loginShell">
         <form className="loginPanel" onSubmit={login}>
-          <div>
-            <h1>Activities</h1>
-            <p className="muted">Prihlaseni do evidence casu</p>
+          <div className="loginBrand">
+            <span className="loginBrandIcon">A</span>
+            <div>
+              <h1>Activities</h1>
+              <p className="muted">Evidence odpracovane doby, aktivit a rezijnich tiketu.</p>
+            </div>
           </div>
+          <p className="loginIntro">Prihlaste se svym uctem pro zapis casu, kontrolu statistik a praci s vykazovanymi aktivitami.</p>
           <label>Uzivatel<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label>
           <label>Heslo<input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
           {loginMessage && <p className="message">{loginMessage}</p>}

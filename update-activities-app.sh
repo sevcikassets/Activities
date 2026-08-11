@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Update a running production instance from origin/master.
+# Update a running production instance from origin/main.
 cd "$(dirname "$0")"
-BRANCH="master"
+BRANCH="main"
 
 echo "==> Kontroluji nove commity na origin/$BRANCH..."
 git fetch origin "$BRANCH"
