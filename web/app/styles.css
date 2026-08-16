@@ -479,6 +479,11 @@ button {
   color: #26374b;
 }
 
+.danger {
+  background: #fdecec;
+  color: #991b1b;
+}
+
 .iconButton {
   aspect-ratio: 1;
   justify-content: center;

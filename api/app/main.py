@@ -19,6 +19,7 @@ from app.repository import (
     category_comparison,
     category_period_summary,
     create_time_entry,
+    delete_time_entry,
     list_overhead_tickets,
     list_time_entries,
     monthly_summary,
@@ -188,6 +189,17 @@ def edit_time_entry(
     if not entry:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Time entry not found.")
     return serialize_entry(entry)
+
+
+@app.delete("/time-entries/{entry_id}")
+def remove_time_entry(
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> dict:
+    if not delete_time_entry(db, entry_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Time entry not found.")
+    return {"deleted": True}
 
 
 @app.get("/time-entries/export.xlsx")

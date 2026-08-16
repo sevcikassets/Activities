@@ -279,6 +279,15 @@ def update_time_entry(db: Session, entry_id, payload: TimeEntryCreate) -> models
     return entry
 
 
+def delete_time_entry(db: Session, entry_id) -> bool:
+    entry = db.scalar(select(models.TimeEntry).where(models.TimeEntry.id == entry_id))
+    if not entry:
+        return False
+    db.delete(entry)
+    db.commit()
+    return True
+
+
 def list_time_entries(
     db: Session,
     date_from: date | None = None,

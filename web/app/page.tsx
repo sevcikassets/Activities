@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, CheckSquare, Copy, Download, Edit3, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Users, X } from "lucide-react";
+import { BarChart3, CheckSquare, Copy, Download, Edit3, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -592,6 +592,24 @@ export default function Home() {
     window.URL.revokeObjectURL(url);
   }
 
+  async function deleteRow(row: ActivityRow) {
+    const confirmed = window.confirm(`Opravdu smazat aktivitu ${row.spent_on} ${timeValue(row.started_at)} - ${row.description}?`);
+    if (!confirmed) {
+      return;
+    }
+    const response = await apiFetch(`/time-entries/${row.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      setMessage("Zaznam se nepodarilo smazat.");
+      return;
+    }
+    if (editingEntryId === row.id) {
+      setEditingEntryId(null);
+      setDraft({ ...emptyDraft, spent_on: draft.spent_on });
+    }
+    setMessage("Zaznam smazan.");
+    await Promise.all([loadActivities(), loadStats(), loadCategoryComparison()]);
+  }
+
   async function applyStatsPeriod(event: FormEvent) {
     event.preventDefault();
     await loadStats(statsDateFrom, statsDateTo);
@@ -966,6 +984,7 @@ export default function Home() {
                             <td className="rowActions">
                               <button className="iconButton secondary" onClick={() => editRow(row)} title="Upravit radek"><Edit3 size={16} /></button>
                               <button className="iconButton secondary" onClick={() => copyRow(row)} title="Kopirovat radek"><Copy size={16} /></button>
+                              <button className="iconButton danger" onClick={() => deleteRow(row)} title="Smazat radek"><Trash2 size={16} /></button>
                             </td>
                           </tr>
                         ))}
