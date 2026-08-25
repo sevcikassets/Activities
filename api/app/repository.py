@@ -396,10 +396,16 @@ def parse_text_entry(db: Session, raw_text: str, spent_on: date | None = None, c
         end_dt += timedelta(days=1)
     duration = Decimal(str(round((end_dt - start_dt).total_seconds() / 3600, 2)))
     project_name = match.group("project").strip()
+    km_value: str | None = None
+    km_match = re.search(r"\s-(?P<km>\d+(?:[,.]\d+)?)$", project_name)
+    if km_match:
+        km_value = km_match.group("km").replace(",", ".")
+        project_name = project_name[: km_match.start()].strip()
     resolved_category = category_code or infer_category_code(project_name)
     ticket = find_valid_overhead_ticket(db, project_name, entry_date, start)
     if not ticket:
         notes.append("Pro zakazku a datum/cas nebyl nalezen platny rezijni tiket.")
+    description = match.group("description").strip()
     draft = {
         "spent_on": entry_date.isoformat(),
         "started_at": start.strftime("%H:%M"),
@@ -409,8 +415,12 @@ def parse_text_entry(db: Session, raw_text: str, spent_on: date | None = None, c
         "description": text,
         "project_name": project_name,
         "ticket_external_id": ticket.external_id if ticket else None,
-        "raw_text": match.group("description").strip(),
+        "raw_text": description,
     }
+    if km_value:
+        draft["km"] = km_value
+    if "cesta" in normalize_name(description):
+        draft["transport_name"] = "Volvo XC90"
     return {
         "draft": draft,
         "matched_ticket": {

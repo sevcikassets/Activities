@@ -1,7 +1,7 @@
 "use client";
 
 import { BarChart3, CheckSquare, Copy, Download, Edit3, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
-import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
+import { Fragment, FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -179,6 +179,15 @@ function timeValue(value: string | null) {
   return value ? value.slice(0, 5) : "";
 }
 
+function timeMinutes(value: string | null) {
+  const time = timeValue(value);
+  if (!time) {
+    return -1;
+  }
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
 function formatDateTime(value: string | null) {
   if (!value) {
     return "";
@@ -207,6 +216,10 @@ function buildQuery(params: Record<string, string>) {
     }
   });
   return query.toString();
+}
+
+function isAutoTimePrefix(value: string) {
+  return /^(\d{1,2}:\d{2}-?)?$/.test(value.trim());
 }
 
 function inferredCategory(projectName: string) {
@@ -322,6 +335,7 @@ export default function Home() {
   const [bulkValidFrom, setBulkValidFrom] = useState("");
   const [bulkValidTo, setBulkValidTo] = useState("");
   const [textEntry, setTextEntry] = useState("");
+  const [textEntryRecognized, setTextEntryRecognized] = useState(false);
   const [voiceText, setVoiceText] = useState("");
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [selectedActivityIds, setSelectedActivityIds] = useState<string[]>([]);
@@ -336,6 +350,7 @@ export default function Home() {
   const [loginMessage, setLoginMessage] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activityFiltersOpen, setActivityFiltersOpen] = useState(false);
 
   const totalVisibleHours = useMemo(
     () => activities.reduce((sum, row) => sum + Number(row.duration_hours || 0), 0).toFixed(2),
@@ -374,6 +389,10 @@ export default function Home() {
   const selectedActivities = useMemo(
     () => activities.filter((row) => selectedActivityIds.includes(row.id)),
     [activities, selectedActivityIds]
+  );
+  const activeActivityFilterCount = useMemo(
+    () => Object.values(filters).filter(Boolean).length,
+    [filters]
   );
 
   function authHeaders(extra?: HeadersInit): HeadersInit {
@@ -484,6 +503,18 @@ export default function Home() {
     refreshAll().catch((error) => setMessage(error.message || "API zatim neodpovida."));
   }, [token]);
 
+  useEffect(() => {
+    if (editingEntryId) {
+      return;
+    }
+    const latestEnd = activities
+      .filter((row) => row.spent_on === draft.spent_on && row.ended_at)
+      .sort((left, right) => timeMinutes(right.ended_at) - timeMinutes(left.ended_at))[0];
+    const nextPrefix = latestEnd ? `${timeValue(latestEnd.ended_at)}-` : "";
+    setTextEntry((current) => (isAutoTimePrefix(current) ? nextPrefix : current));
+    setTextEntryRecognized(false);
+  }, [activities, draft.spent_on, editingEntryId]);
+
   async function login(event: FormEvent) {
     event.preventDefault();
     setLoginMessage("");
@@ -526,13 +557,19 @@ export default function Home() {
       return;
     }
     setMessage(editingEntryId ? "Zaznam upraven." : "Zaznam ulozen.");
+    const nextTextPrefix = !editingEntryId && draft.ended_at ? `${draft.ended_at}-` : "";
     setEditingEntryId(null);
     setDraft({ ...emptyDraft, spent_on: draft.spent_on });
-    setTextEntry("");
+    setTextEntry(nextTextPrefix);
+    setTextEntryRecognized(false);
     await Promise.all([loadActivities(), loadStats(), loadCategoryComparison()]);
   }
 
   async function parseTextEntry() {
+    if (!textEntry.trim()) {
+      setMessage("Zadejte text aktivity k rozpoznani.");
+      return;
+    }
     const response = await apiFetch("/time-entries/parse-text", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -549,7 +586,23 @@ export default function Home() {
       category_code: parsed.draft.category_code ?? current.category_code ?? "",
       reported_status: current.reported_status
     }));
+    setTextEntryRecognized(Boolean(parsed.draft.started_at && parsed.draft.ended_at && parsed.draft.description));
     setMessage(parsed.matched_ticket ? `Vybran tiket ${parsed.matched_ticket.external_id}.` : parsed.confidence_notes.join(" "));
+  }
+
+  function handleEntryKeyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.key !== "Enter" || event.target instanceof HTMLTextAreaElement) {
+      return;
+    }
+    if (textEntryRecognized) {
+      event.preventDefault();
+      void saveEntry();
+      return;
+    }
+    if ((event.target as HTMLElement).dataset.quickText === "true") {
+      event.preventDefault();
+      void parseTextEntry();
+    }
   }
 
   async function parseVoice() {
@@ -725,6 +778,7 @@ export default function Home() {
   }
 
   function updateProject(projectName: string) {
+    setTextEntryRecognized(false);
     setDraft((current) => ({
       ...current,
       project_name: projectName,
@@ -879,7 +933,7 @@ export default function Home() {
         {section === "activities" && (
           <>
             <section className="workspace">
-              <form className="panel entryPanel" onSubmit={saveEntry}>
+              <form className="panel entryPanel" onSubmit={saveEntry} onKeyDownCapture={handleEntryKeyDown}>
                 <div className="panelHeader">
                   <h2>{editingEntryId ? "Uprava zaznamu" : "Novy zaznam"}</h2>
                   <Save size={18} />
@@ -890,8 +944,12 @@ export default function Home() {
                   <label>
                     Text
                     <input
+                      data-quick-text="true"
                       value={textEntry}
-                      onChange={(event) => setTextEntry(event.target.value)}
+                      onChange={(event) => {
+                        setTextEntry(event.target.value);
+                        setTextEntryRecognized(false);
+                      }}
                       placeholder="08:00-08:30: E-maily Z: ZAKO SMLS"
                     />
                   </label>
@@ -937,17 +995,23 @@ export default function Home() {
                   <h2>Seznam aktivit</h2>
                   <p className="muted">Zobrazeno {activities.length} zaznamu, zadano {totalVisibleHours} h, skutecne {totalEffectiveHours} h</p>
                 </div>
-                <ListFilter size={18} />
+                <div className="headerActions">
+                  <button type="button" className="secondary" onClick={() => setActivityFiltersOpen((current) => !current)}>
+                    <ListFilter size={18} /> Filtr{activeActivityFilterCount ? ` (${activeActivityFilterCount})` : ""}
+                  </button>
+                  <button type="button" className="secondary" onClick={exportActivities}><Download size={18} /> Excel</button>
+                </div>
               </div>
-              <form className="filterBar" onSubmit={applyFilters}>
-                <label>Od<input type="date" value={filters.date_from} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} /></label>
-                <label>Do<input type="date" value={filters.date_to} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} /></label>
-                <label>Zakazka<input value={filters.project} onChange={(e) => setFilters({ ...filters, project: e.target.value })} /></label>
-                <label>Tiket<input value={filters.ticket} onChange={(e) => setFilters({ ...filters, ticket: e.target.value })} /></label>
-                <label>Text<input value={filters.text} onChange={(e) => setFilters({ ...filters, text: e.target.value })} /></label>
-                <button type="submit"><Search size={18} /> Filtrovat</button>
-                <button type="button" className="secondary" onClick={exportActivities}><Download size={18} /> Excel</button>
-              </form>
+              {activityFiltersOpen && (
+                <form className="filterBar" onSubmit={applyFilters}>
+                  <label>Od<input type="date" value={filters.date_from} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} /></label>
+                  <label>Do<input type="date" value={filters.date_to} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} /></label>
+                  <label>Zakazka<input value={filters.project} onChange={(e) => setFilters({ ...filters, project: e.target.value })} /></label>
+                  <label>Tiket<input value={filters.ticket} onChange={(e) => setFilters({ ...filters, ticket: e.target.value })} /></label>
+                  <label>Text<input value={filters.text} onChange={(e) => setFilters({ ...filters, text: e.target.value })} /></label>
+                  <button type="submit"><Search size={18} /> Filtrovat</button>
+                </form>
+              )}
               <form className="bulkCopyForm" onSubmit={bulkCopyActivities}>
                 <label>Kopirovat na<input type="date" value={bulkCopyDate} onChange={(event) => setBulkCopyDate(event.target.value)} /></label>
                 <span className="bulkInfo">Vybrano {selectedActivityIds.length}</span>
@@ -970,8 +1034,8 @@ export default function Home() {
                             <td><input type="checkbox" checked={selectedActivityIds.includes(row.id)} onChange={() => toggleActivitySelection(row.id)} /></td>
                             <td>{row.spent_on}</td>
                             <td>{weekdayName(row.spent_on)}</td>
-                            <td>{timeValue(row.started_at)}</td>
-                            <td>{timeValue(row.ended_at)}</td>
+                            <td className="timeCell timeStart"><span>{timeValue(row.started_at)}</span></td>
+                            <td className="timeCell timeEnd"><span>{timeValue(row.ended_at)}</span></td>
                             <td>{row.duration_hours}</td>
                             <td>{row.overlap_hours}</td>
                             <td>{row.effective_hours}</td>

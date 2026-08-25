@@ -318,6 +318,14 @@ h2 {
   margin-bottom: 14px;
 }
 
+.headerActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .gridForm {
   display: grid;
   gap: 12px;
@@ -704,6 +712,29 @@ th {
 
 td {
   font-size: 13px;
+}
+
+.timeCell {
+  white-space: nowrap;
+}
+
+.timeCell span {
+  border-radius: 6px;
+  display: inline-block;
+  font-weight: 700;
+  min-width: 54px;
+  padding: 4px 7px;
+  text-align: center;
+}
+
+.timeStart span {
+  background: #e9f7ef;
+  color: #166534;
+}
+
+.timeEnd span {
+  background: #fff4df;
+  color: #8a5200;
 }
 
 .descriptionCell {
