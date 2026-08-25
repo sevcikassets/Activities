@@ -162,6 +162,17 @@ def calculate_overlap_hours(db: Session, payload: TimeEntryCreate) -> Decimal:
     return Decimal(str(round(overlap_minutes / 60, 2)))
 
 
+def calculate_duration_hours(payload: TimeEntryCreate) -> Decimal:
+    if not payload.started_at or not payload.ended_at:
+        return payload.duration_hours
+
+    start_dt = datetime.combine(payload.spent_on, payload.started_at)
+    end_dt = datetime.combine(payload.spent_on, payload.ended_at)
+    if end_dt < start_dt:
+        end_dt += timedelta(days=1)
+    return Decimal(str(round((end_dt - start_dt).total_seconds() / 3600, 2)))
+
+
 def calculate_overlap_hours_for_entry(db: Session, entry_id, payload: TimeEntryCreate) -> Decimal:
     if not payload.started_at or not payload.ended_at:
         return Decimal("0")
@@ -216,11 +227,12 @@ def create_time_entry(db: Session, payload: TimeEntryCreate, source: str = "manu
     category_code = get_or_create_category(db, payload.category_code or infer_category_code(payload.project_name))
     transport = get_or_create_transport(db, payload.transport_name)
     overlap_hours = calculate_overlap_hours(db, payload)
+    duration_hours = calculate_duration_hours(payload)
     entry = models.TimeEntry(
         spent_on=payload.spent_on,
         started_at=payload.started_at,
         ended_at=payload.ended_at,
-        duration_hours=payload.duration_hours,
+        duration_hours=duration_hours,
         category_code=category_code,
         description=payload.description,
         ticket_id=ticket.id if ticket else None,
@@ -262,7 +274,7 @@ def update_time_entry(db: Session, entry_id, payload: TimeEntryCreate) -> models
     entry.spent_on = payload.spent_on
     entry.started_at = payload.started_at
     entry.ended_at = payload.ended_at
-    entry.duration_hours = payload.duration_hours
+    entry.duration_hours = calculate_duration_hours(payload)
     entry.category_code = category_code
     entry.description = payload.description
     entry.ticket_id = ticket.id if ticket else None
@@ -397,7 +409,7 @@ def parse_text_entry(db: Session, raw_text: str, spent_on: date | None = None, c
     duration = Decimal(str(round((end_dt - start_dt).total_seconds() / 3600, 2)))
     project_name = match.group("project").strip()
     km_value: str | None = None
-    km_match = re.search(r"\s-(?P<km>\d+(?:[,.]\d+)?)$", project_name)
+    km_match = re.search(r"\s*-\s*(?P<km>\d+(?:[,.]\d+)?)$", project_name)
     if km_match:
         km_value = km_match.group("km").replace(",", ".")
         project_name = project_name[: km_match.start()].strip()

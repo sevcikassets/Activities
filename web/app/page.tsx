@@ -202,6 +202,61 @@ function timeMinutes(value: string | null) {
   return hours * 60 + minutes;
 }
 
+function durationFromTimes(startedAt: string, endedAt: string) {
+  if (!startedAt || !endedAt) {
+    return "";
+  }
+  const start = timeMinutes(startedAt);
+  let end = timeMinutes(endedAt);
+  if (start < 0 || end < 0) {
+    return "";
+  }
+  if (end < start) {
+    end += 24 * 60;
+  }
+  return ((end - start) / 60).toFixed(2);
+}
+
+function overlapHoursForDraft(rows: ActivityRow[], draft: EntryDraft, editingEntryId: string | null) {
+  if (!draft.spent_on || !draft.started_at || !draft.ended_at) {
+    return "0.00";
+  }
+  const start = timeMinutes(draft.started_at);
+  let end = timeMinutes(draft.ended_at);
+  if (start < 0 || end < 0) {
+    return "0.00";
+  }
+  if (end < start) {
+    end += 24 * 60;
+  }
+
+  const intervals = rows
+    .filter((row) => row.id !== editingEntryId && row.spent_on === draft.spent_on && row.started_at && row.ended_at)
+    .map((row) => {
+      const rowStart = timeMinutes(row.started_at);
+      let rowEnd = timeMinutes(row.ended_at);
+      if (rowEnd < rowStart) {
+        rowEnd += 24 * 60;
+      }
+      return [Math.max(start, rowStart), Math.min(end, rowEnd)] as const;
+    })
+    .filter(([overlapStart, overlapEnd]) => overlapEnd > overlapStart)
+    .sort(([leftStart], [rightStart]) => leftStart - rightStart);
+
+  const merged: number[][] = [];
+  for (const [overlapStart, overlapEnd] of intervals) {
+    const previous = merged[merged.length - 1];
+    if (!previous || overlapStart > previous[1]) {
+      merged.push([overlapStart, overlapEnd]);
+    } else {
+      previous[1] = Math.max(previous[1], overlapEnd);
+    }
+  }
+
+  const overlapMinutes = merged.reduce((sum, [overlapStart, overlapEnd]) => sum + overlapEnd - overlapStart, 0);
+  return (overlapMinutes / 60).toFixed(2);
+}
+
 function formatDateTime(value: string | null) {
   if (!value) {
     return "";
@@ -407,6 +462,14 @@ export default function Home() {
   const activeActivityFilterCount = useMemo(
     () => Object.values(filters).filter(Boolean).length,
     [filters]
+  );
+  const draftOverlapHours = useMemo(
+    () => overlapHoursForDraft(activities, draft, editingEntryId),
+    [activities, draft, editingEntryId]
+  );
+  const draftEffectiveHours = useMemo(
+    () => (Number(draft.duration_hours || 0) - Number(draftOverlapHours || 0)).toFixed(2),
+    [draft.duration_hours, draftOverlapHours]
   );
 
   function authHeaders(extra?: HeadersInit): HeadersInit {
@@ -800,6 +863,18 @@ export default function Home() {
     }));
   }
 
+  function updateDraftTime(field: "started_at" | "ended_at", value: string) {
+    setTextEntryRecognized(false);
+    setDraft((current) => {
+      const next = { ...current, [field]: value };
+      const durationHours = durationFromTimes(next.started_at, next.ended_at);
+      return {
+        ...next,
+        duration_hours: durationHours || next.duration_hours
+      };
+    });
+  }
+
   function copyRow(row: ActivityRow) {
     setEditingEntryId(null);
     setDraft({
@@ -973,9 +1048,11 @@ export default function Home() {
                 </div>
 
                 <div className="gridForm">
-                  <label>Od<input type="time" value={draft.started_at} onChange={(e) => setDraft({ ...draft, started_at: e.target.value })} /></label>
-                  <label>Do<input type="time" value={draft.ended_at} onChange={(e) => setDraft({ ...draft, ended_at: e.target.value })} /></label>
+                  <label>Od<input type="time" value={draft.started_at} onChange={(e) => updateDraftTime("started_at", e.target.value)} /></label>
+                  <label>Do<input type="time" value={draft.ended_at} onChange={(e) => updateDraftTime("ended_at", e.target.value)} /></label>
                   <label>Hodin<input type="number" step="0.25" value={draft.duration_hours} onChange={(e) => setDraft({ ...draft, duration_hours: e.target.value })} /></label>
+                  <label>Prekryv<input readOnly value={draftOverlapHours} /></label>
+                  <label>Skutecne<input readOnly value={draftEffectiveHours} /></label>
                   <label>Kat.<input value={draft.category_code} onChange={(e) => setDraft({ ...draft, category_code: e.target.value })} /></label>
                   <label>Tiket<input value={draft.ticket_external_id} onChange={(e) => setDraft({ ...draft, ticket_external_id: e.target.value })} /></label>
                   <label>Zakazka<input value={draft.project_name} onChange={(e) => updateProject(e.target.value)} /></label>
