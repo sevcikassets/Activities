@@ -886,9 +886,13 @@ export default function Home() {
     setTextEntryRecognized(false);
     setDraft((current) => {
       const nextChanges = typeof changes === "function" ? changes(current) : changes;
-      const next = { ...current, ...nextChanges };
+      let next = { ...current, ...nextChanges };
       if (syncText) {
-        setTextEntry(quickTextFromDraft(next));
+        const quickText = quickTextFromDraft(next);
+        setTextEntry(quickText);
+        if (quickText) {
+          next = { ...next, description: quickText };
+        }
       }
       return next;
     });
@@ -1108,7 +1112,7 @@ export default function Home() {
                 <datalist id="transport-options">
                   {transportOptions.map((transport) => <option key={transport} value={transport} />)}
                 </datalist>
-                <label>Popis<textarea value={draft.description} onChange={(e) => updateDraftDetail({ description: e.target.value, raw_text: e.target.value })} /></label>
+                <label>Popis<textarea value={draft.description} onChange={(e) => updateDraftDetail({ description: e.target.value, raw_text: e.target.value }, false)} /></label>
               <div className="actions">
                   <button type="submit"><Save size={18} /> {editingEntryId ? "Ulozit zmeny" : "Ulozit"}</button>
                   {editingEntryId && <button type="button" className="secondary" onClick={cancelEdit}><X size={18} /> Zrusit upravu</button>}
