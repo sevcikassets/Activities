@@ -418,13 +418,14 @@ def parse_text_entry(db: Session, raw_text: str, spent_on: date | None = None, c
     if not ticket:
         notes.append("Pro zakazku a datum/cas nebyl nalezen platny rezijni tiket.")
     description = match.group("description").strip()
+    normalized_text = f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}: {description} Z: {project_name}"
     draft = {
         "spent_on": entry_date.isoformat(),
         "started_at": start.strftime("%H:%M"),
         "ended_at": end.strftime("%H:%M"),
         "duration_hours": str(duration),
         "category_code": resolved_category,
-        "description": text,
+        "description": normalized_text,
         "project_name": project_name,
         "ticket_external_id": ticket.external_id if ticket else None,
         "raw_text": description,

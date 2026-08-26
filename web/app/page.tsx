@@ -291,6 +291,29 @@ function isAutoTimePrefix(value: string) {
   return /^(\d{1,2}:\d{2}-?)?$/.test(value.trim());
 }
 
+function stripTextEntryStructure(description: string, projectName: string) {
+  let value = description.trim();
+  value = value.replace(/^\d{1,2}[:.]\d{2}\s*-\s*\d{1,2}[:.\-]\d{2}\s*:\s*/i, "");
+  if (projectName) {
+    const escapedProject = projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    value = value.replace(new RegExp(`\\s+Z:\\s*${escapedProject}(?:\\s*-\\s*\\d+(?:[,.]\\d+)?)?\\s*$`, "i"), "");
+  } else {
+    value = value.replace(/\s+Z:\s*.+?(?:\s*-\s*\d+(?:[,.]\d+)?)?\s*$/i, "");
+  }
+  return value.trim();
+}
+
+function quickTextFromDraft(value: EntryDraft) {
+  const startedAt = timeValue(value.started_at);
+  const endedAt = timeValue(value.ended_at);
+  const projectName = (value.project_name || "").trim();
+  const description = stripTextEntryStructure(value.raw_text || value.description || "", projectName);
+  if (!startedAt || !endedAt || !description || !projectName) {
+    return "";
+  }
+  return `${startedAt}-${endedAt}: ${description} Z: ${projectName}`;
+}
+
 function inferredCategory(projectName: string) {
   const normalized = projectName
     .normalize("NFD")
@@ -657,12 +680,17 @@ export default function Home() {
       })
     });
     const parsed = await response.json();
-    setDraft((current) => ({
-      ...current,
+    const nextDraft = {
+      ...draft,
       ...parsed.draft,
-      category_code: parsed.draft.category_code ?? current.category_code ?? "",
-      reported_status: current.reported_status
-    }));
+      category_code: parsed.draft.category_code ?? draft.category_code ?? "",
+      reported_status: draft.reported_status
+    };
+    setDraft(nextDraft);
+    const quickText = quickTextFromDraft(nextDraft);
+    if (quickText) {
+      setTextEntry(quickText);
+    }
     setTextEntryRecognized(Boolean(parsed.draft.started_at && parsed.draft.ended_at && parsed.draft.description));
     setMessage(parsed.matched_ticket ? `Vybran tiket ${parsed.matched_ticket.external_id}.` : parsed.confidence_notes.join(" "));
   }
@@ -854,22 +882,31 @@ export default function Home() {
     setMenuOpen(false);
   }
 
-  function updateProject(projectName: string) {
+  function updateDraftDetail(changes: Partial<EntryDraft> | ((current: EntryDraft) => Partial<EntryDraft>), syncText = true) {
     setTextEntryRecognized(false);
-    setDraft((current) => ({
-      ...current,
+    setDraft((current) => {
+      const nextChanges = typeof changes === "function" ? changes(current) : changes;
+      const next = { ...current, ...nextChanges };
+      if (syncText) {
+        setTextEntry(quickTextFromDraft(next));
+      }
+      return next;
+    });
+  }
+
+  function updateProject(projectName: string) {
+    updateDraftDetail((current) => ({
       project_name: projectName,
       category_code: current.category_code || inferredCategory(projectName)
     }));
   }
 
   function updateDraftTime(field: "started_at" | "ended_at", value: string) {
-    setTextEntryRecognized(false);
-    setDraft((current) => {
+    updateDraftDetail((current) => {
       const next = { ...current, [field]: value };
       const durationHours = durationFromTimes(next.started_at, next.ended_at);
       return {
-        ...next,
+        [field]: value,
         duration_hours: durationHours || next.duration_hours
       };
     });
@@ -877,7 +914,7 @@ export default function Home() {
 
   function copyRow(row: ActivityRow) {
     setEditingEntryId(null);
-    setDraft({
+    const nextDraft = {
       spent_on: row.spent_on,
       started_at: timeValue(row.started_at),
       ended_at: timeValue(row.ended_at),
@@ -888,14 +925,18 @@ export default function Home() {
       project_name: row.project_name ?? "",
       transport_name: row.transport_name ?? "",
       km: row.km ?? "",
-      reported_status: row.reported_status ?? ""
-    });
+      reported_status: row.reported_status ?? "",
+      raw_text: stripTextEntryStructure(row.description, row.project_name ?? "")
+    };
+    setDraft(nextDraft);
+    setTextEntry(quickTextFromDraft(nextDraft));
+    setTextEntryRecognized(false);
     switchSection("activities");
   }
 
   function editRow(row: ActivityRow) {
     setEditingEntryId(row.id);
-    setDraft({
+    const nextDraft = {
       spent_on: row.spent_on,
       started_at: timeValue(row.started_at),
       ended_at: timeValue(row.ended_at),
@@ -906,8 +947,12 @@ export default function Home() {
       project_name: row.project_name ?? "",
       transport_name: row.transport_name ?? "",
       km: row.km ?? "",
-      reported_status: row.reported_status ?? ""
-    });
+      reported_status: row.reported_status ?? "",
+      raw_text: stripTextEntryStructure(row.description, row.project_name ?? "")
+    };
+    setDraft(nextDraft);
+    setTextEntry(quickTextFromDraft(nextDraft));
+    setTextEntryRecognized(false);
     switchSection("activities");
   }
 
@@ -1029,7 +1074,7 @@ export default function Home() {
                 </div>
 
                 <div className="quickEntry">
-                  <label>Datum<input type="date" value={draft.spent_on} onChange={(e) => setDraft({ ...draft, spent_on: e.target.value })} /></label>
+                  <label>Datum<input type="date" value={draft.spent_on} onChange={(e) => updateDraftDetail({ spent_on: e.target.value }, false)} /></label>
                   <label>
                     Text
                     <input
@@ -1050,20 +1095,20 @@ export default function Home() {
                 <div className="gridForm">
                   <label>Od<input type="time" value={draft.started_at} onChange={(e) => updateDraftTime("started_at", e.target.value)} /></label>
                   <label>Do<input type="time" value={draft.ended_at} onChange={(e) => updateDraftTime("ended_at", e.target.value)} /></label>
-                  <label>Hodin<input type="number" step="0.25" value={draft.duration_hours} onChange={(e) => setDraft({ ...draft, duration_hours: e.target.value })} /></label>
+                  <label>Hodin<input type="number" step="0.25" value={draft.duration_hours} onChange={(e) => updateDraftDetail({ duration_hours: e.target.value }, false)} /></label>
                   <label>Prekryv<input readOnly value={draftOverlapHours} /></label>
                   <label>Skutecne<input readOnly value={draftEffectiveHours} /></label>
-                  <label>Kat.<input value={draft.category_code} onChange={(e) => setDraft({ ...draft, category_code: e.target.value })} /></label>
-                  <label>Tiket<input value={draft.ticket_external_id} onChange={(e) => setDraft({ ...draft, ticket_external_id: e.target.value })} /></label>
+                  <label>Kat.<input value={draft.category_code} onChange={(e) => updateDraftDetail({ category_code: e.target.value }, false)} /></label>
+                  <label>Tiket<input value={draft.ticket_external_id} onChange={(e) => updateDraftDetail({ ticket_external_id: e.target.value }, false)} /></label>
                   <label>Zakazka<input value={draft.project_name} onChange={(e) => updateProject(e.target.value)} /></label>
-                  <label>Doprava<input list="transport-options" value={draft.transport_name} onChange={(e) => setDraft({ ...draft, transport_name: e.target.value })} /></label>
-                  <label>km<input type="number" step="0.1" value={draft.km} onChange={(e) => setDraft({ ...draft, km: e.target.value })} /></label>
-                  <label>Zapsano<input value={draft.reported_status} onChange={(e) => setDraft({ ...draft, reported_status: e.target.value })} /></label>
+                  <label>Doprava<input list="transport-options" value={draft.transport_name} onChange={(e) => updateDraftDetail({ transport_name: e.target.value }, false)} /></label>
+                  <label>km<input type="number" step="0.1" value={draft.km} onChange={(e) => updateDraftDetail({ km: e.target.value }, false)} /></label>
+                  <label>Zapsano<input value={draft.reported_status} onChange={(e) => updateDraftDetail({ reported_status: e.target.value }, false)} /></label>
                 </div>
                 <datalist id="transport-options">
                   {transportOptions.map((transport) => <option key={transport} value={transport} />)}
                 </datalist>
-                <label>Popis<textarea value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label>
+                <label>Popis<textarea value={draft.description} onChange={(e) => updateDraftDetail({ description: e.target.value, raw_text: e.target.value })} /></label>
               <div className="actions">
                   <button type="submit"><Save size={18} /> {editingEntryId ? "Ulozit zmeny" : "Ulozit"}</button>
                   {editingEntryId && <button type="button" className="secondary" onClick={cancelEdit}><X size={18} /> Zrusit upravu</button>}
