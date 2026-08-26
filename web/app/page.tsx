@@ -324,7 +324,7 @@ function inferredCategory(projectName: string) {
     .trim();
   if (normalized === "abra vr") return "A";
   if (normalized === "anglictina") return "V";
-  if (normalized === "rd kvasice" || normalized === "investice") return "S";
+  if (normalized === "rd kvasice" || normalized === "investice" || normalized === "soukrome") return "S";
   if (normalized === "pohyb" || normalized === "cviceni") return "P";
   return "";
 }

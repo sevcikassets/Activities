@@ -23,7 +23,7 @@ def infer_category_code(project_name: str | None) -> str | None:
         return "A"
     if project_key == "anglictina":
         return "V"
-    if project_key in {"rd kvasice", "investice"}:
+    if project_key in {"rd kvasice", "investice", "soukrome"}:
         return "S"
     if project_key in {"pohyb", "cviceni"}:
         return "P"
