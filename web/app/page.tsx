@@ -33,6 +33,7 @@ type CategoryPeriodRow = {
   abra_hours: string;
   education_hours: string;
   private_hours: string;
+  movement_hours: string;
   tanaka_hours: string;
   total_hours: string;
 };
@@ -172,6 +173,7 @@ const categorySeries = [
   { key: "abra_hours", label: "ABRA", color: "#15616d" },
   { key: "education_hours", label: "Vzdelavani", color: "#6b5b95" },
   { key: "private_hours", label: "Soukrome", color: "#c17c1f" },
+  { key: "movement_hours", label: "Pohyb", color: "#2f855a" },
   { key: "tanaka_hours", label: "TANAKA", color: "#3f5f8f" }
 ] as const;
 
@@ -323,6 +325,7 @@ function inferredCategory(projectName: string) {
   if (normalized === "abra vr") return "A";
   if (normalized === "anglictina") return "V";
   if (normalized === "rd kvasice" || normalized === "investice") return "S";
+  if (normalized === "pohyb" || normalized === "cviceni") return "P";
   return "";
 }
 

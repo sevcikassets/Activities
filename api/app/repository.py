@@ -25,6 +25,8 @@ def infer_category_code(project_name: str | None) -> str | None:
         return "V"
     if project_key in {"rd kvasice", "investice"}:
         return "S"
+    if project_key in {"pohyb", "cviceni"}:
+        return "P"
     return None
 
 
@@ -580,6 +582,7 @@ def category_period_summary(
                 "abra_hours": Decimal("0"),
                 "education_hours": Decimal("0"),
                 "private_hours": Decimal("0"),
+                "movement_hours": Decimal("0"),
                 "tanaka_hours": Decimal("0"),
                 "total_hours": Decimal("0"),
             },
@@ -591,6 +594,8 @@ def category_period_summary(
             item["education_hours"] += row.hours
         elif category_code == "S":
             item["private_hours"] += row.hours
+        elif category_code == "P":
+            item["movement_hours"] += row.hours
         elif category_code is None:
             item["tanaka_hours"] += row.hours
         item["total_hours"] += row.hours
@@ -615,6 +620,7 @@ def category_comparison(db: Session, today: date):
         ("A", "ABRA", "A"),
         ("V", "Vzdelavani", "V"),
         ("S", "Soukrome", "S"),
+        ("P", "Pohyb", "P"),
         ("tanaka", "TANAKA", None),
     ]
 

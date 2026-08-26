@@ -97,6 +97,7 @@ class CategoryPeriodRow(BaseModel):
     abra_hours: Decimal
     education_hours: Decimal
     private_hours: Decimal
+    movement_hours: Decimal
     tanaka_hours: Decimal
     total_hours: Decimal
 
