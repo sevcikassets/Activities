@@ -378,7 +378,7 @@ h2 {
   border-radius: 8px;
   display: grid;
   gap: 10px;
-  grid-template-columns: 170px auto auto;
+  grid-template-columns: 170px auto auto auto;
   justify-content: start;
   margin-bottom: 12px;
   padding: 10px;

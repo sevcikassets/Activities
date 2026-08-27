@@ -433,6 +433,28 @@ function addHours(left: string, right: string) {
   return (Number(left || 0) + Number(right || 0)).toFixed(2);
 }
 
+function addDays(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatOverlap(value: string | null) {
+  if (!value || Number(value) === 0) {
+    return "";
+  }
+  return value;
+}
+
+function minutesFromTime(value: string | null) {
+  const time = timeValue(value);
+  if (!time) {
+    return null;
+  }
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
 function fuelAverage(liters: number, tripKm: number) {
   if (!tripKm) {
     return "";
@@ -674,6 +696,7 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activityFiltersOpen, setActivityFiltersOpen] = useState(false);
+  const [bulkCopyOpen, setBulkCopyOpen] = useState(false);
   const [fuelStatsOpen, setFuelStatsOpen] = useState(false);
 
   const totalVisibleHours = useMemo(
@@ -1165,7 +1188,37 @@ export default function Home() {
     }
     setMessage(`Zkopirovano ${selectedActivities.length} aktivit na ${bulkCopyDate}.`);
     setSelectedActivityIds([]);
+    setBulkCopyOpen(false);
     await Promise.all([loadActivities(), loadStats(), loadCategoryComparison()]);
+  }
+
+  function suggestedBulkCopyDate() {
+    if (!activities.length) {
+      return today();
+    }
+    const lastDate = activities.reduce((max, row) => row.spent_on > max ? row.spent_on : max, activities[0].spent_on);
+    const latestMinutesOnLastDate = activities
+      .filter((row) => row.spent_on === lastDate)
+      .map((row) => minutesFromTime(row.ended_at) ?? minutesFromTime(row.started_at))
+      .filter((value): value is number => value !== null)
+      .reduce((max, value) => Math.max(max, value), -1);
+    const earliestSelectedMinutes = selectedActivities
+      .map((row) => minutesFromTime(row.started_at) ?? minutesFromTime(row.ended_at))
+      .filter((value): value is number => value !== null)
+      .reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY);
+    if (Number.isFinite(earliestSelectedMinutes) && earliestSelectedMinutes > latestMinutesOnLastDate) {
+      return lastDate;
+    }
+    return addDays(lastDate, 1);
+  }
+
+  function openBulkCopy() {
+    if (!selectedActivities.length) {
+      setMessage("Nejdrive vyberte aktivity ke kopirovani.");
+      return;
+    }
+    setBulkCopyDate(suggestedBulkCopyDate());
+    setBulkCopyOpen(true);
   }
 
   async function bulkUpdateOverheadValidity(event: FormEvent) {
@@ -1595,6 +1648,9 @@ export default function Home() {
                   <button type="button" className="secondary" onClick={() => setActivityFiltersOpen((current) => !current)}>
                     <ListFilter size={18} /> Filtr{activeActivityFilterCount ? ` (${activeActivityFilterCount})` : ""}
                   </button>
+                  <button type="button" className="secondary" onClick={openBulkCopy}>
+                    <CheckSquare size={18} /> Kopie{selectedActivityIds.length ? ` (${selectedActivityIds.length})` : ""}
+                  </button>
                   <button type="button" className="secondary" onClick={exportActivities}><Download size={18} /> Excel</button>
                 </div>
               </div>
@@ -1608,11 +1664,14 @@ export default function Home() {
                   <button type="submit"><Search size={18} /> Filtrovat</button>
                 </form>
               )}
-              <form className="bulkCopyForm" onSubmit={bulkCopyActivities}>
-                <label>Kopirovat na<input type="date" value={bulkCopyDate} onChange={(event) => setBulkCopyDate(event.target.value)} /></label>
-                <span className="bulkInfo">Vybrano {selectedActivityIds.length}</span>
-                <button type="submit"><CheckSquare size={18} /> Zkopirovat vybrane</button>
-              </form>
+              {bulkCopyOpen && (
+                <form className="bulkCopyForm" onSubmit={bulkCopyActivities}>
+                  <label>Kopirovat na<input type="date" value={bulkCopyDate} onChange={(event) => setBulkCopyDate(event.target.value)} /></label>
+                  <span className="bulkInfo">Vybrano {selectedActivityIds.length}</span>
+                  <button type="submit"><CheckSquare size={18} /> Zkopirovat vybrane</button>
+                  <button type="button" className="secondary" onClick={() => setBulkCopyOpen(false)}><X size={18} /> Zrusit</button>
+                </form>
+              )}
 
               <div className="tableWrap">
                 <table>
@@ -1633,7 +1692,7 @@ export default function Home() {
                             <td className="timeCell timeStart"><span>{timeValue(row.started_at)}</span></td>
                             <td className="timeCell timeEnd"><span>{timeValue(row.ended_at)}</span></td>
                             <td>{row.duration_hours}</td>
-                            <td>{row.overlap_hours}</td>
+                            <td>{formatOverlap(row.overlap_hours)}</td>
                             <td>{row.effective_hours}</td>
                             <td>{row.category_code}</td>
                             <td>{row.ticket_external_id}</td>
