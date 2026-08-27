@@ -136,6 +136,77 @@ class VoiceParseResponse(BaseModel):
     confidence_notes: list[str]
 
 
+class FuelVehicleOut(BaseModel):
+    id: UUID
+    code: str
+    name: str
+    is_active: bool
+    sort_order: int
+
+
+class FuelEntryBase(BaseModel):
+    vehicle_id: UUID
+    purchased_on: date
+    purchased_at: time | None = None
+    station: str | None = None
+    fuel_type: str | None = None
+    odometer_km: Decimal | None = None
+    liters: Decimal | None = None
+    total_price_vat: Decimal | None = None
+    total_price_no_vat: Decimal | None = None
+    price_per_liter: Decimal | None = None
+    trip_km: Decimal | None = None
+    full_tank: bool | None = None
+    average_consumption: Decimal | None = None
+    note: str | None = None
+
+
+class FuelEntryCreate(FuelEntryBase):
+    pass
+
+
+class FuelEntryUpdate(BaseModel):
+    vehicle_id: UUID | None = None
+    purchased_on: date | None = None
+    purchased_at: time | None = None
+    station: str | None = None
+    fuel_type: str | None = None
+    odometer_km: Decimal | None = None
+    liters: Decimal | None = None
+    total_price_vat: Decimal | None = None
+    total_price_no_vat: Decimal | None = None
+    price_per_liter: Decimal | None = None
+    trip_km: Decimal | None = None
+    full_tank: bool | None = None
+    average_consumption: Decimal | None = None
+    note: str | None = None
+
+
+class FuelEntryOut(FuelEntryBase):
+    id: UUID
+    vehicle_name: str
+    receipt_photo_path: str | None
+    dashboard_photo_path: str | None
+    source: str
+    source_sheet: str | None
+    source_row: int | None
+
+
+class FuelSummaryRow(BaseModel):
+    period_key: str
+    period_label: str
+    level: str
+    liters: Decimal
+    total_price_vat: Decimal
+    trip_km: Decimal
+    average_consumption: Decimal | None
+
+
+class FuelImportResponse(BaseModel):
+    imported_rows: int
+    skipped_rows: int
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str

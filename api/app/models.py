@@ -101,3 +101,46 @@ class VoiceInput(Base):
     status: Mapped[str] = mapped_column(Text, default="draft")
     created_entry_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), ForeignKey("time_entries.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FuelVehicle(Base):
+    __tablename__ = "fuel_vehicles"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    code: Mapped[str] = mapped_column(Text, unique=True)
+    name: Mapped[str] = mapped_column(Text, unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(default=0)
+    source_sheets: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    fuel_entries: Mapped[list["FuelEntry"]] = relationship(back_populates="vehicle")
+
+
+class FuelEntry(Base):
+    __tablename__ = "fuel_entries"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    vehicle_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), ForeignKey("fuel_vehicles.id"))
+    purchased_on: Mapped[date] = mapped_column(Date)
+    purchased_at: Mapped[time | None] = mapped_column(Time)
+    station: Mapped[str | None] = mapped_column(Text)
+    fuel_type: Mapped[str | None] = mapped_column(Text)
+    odometer_km: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    liters: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    total_price_vat: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    total_price_no_vat: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    price_per_liter: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    trip_km: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    full_tank: Mapped[bool | None] = mapped_column(Boolean)
+    average_consumption: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    note: Mapped[str | None] = mapped_column(Text)
+    receipt_photo_path: Mapped[str | None] = mapped_column(Text)
+    dashboard_photo_path: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text, default="manual")
+    source_sheet: Mapped[str | None] = mapped_column(Text)
+    source_row: Mapped[int | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    vehicle: Mapped[FuelVehicle] = relationship(back_populates="fuel_entries")

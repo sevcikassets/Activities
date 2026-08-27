@@ -4,11 +4,20 @@ from decimal import Decimal
 import re
 from unicodedata import normalize
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from app import models
 from app.schemas import TimeEntryCreate
+
+
+FUEL_VEHICLES = [
+    ("volvo-xc90", "Volvo", True, 1, ["EL6 14DE XC90"]),
+    ("skoda-felicie", "Skoda Felicie", False, 2, ["ZLI 89-51 Natural 95", "ZLI 89-51 LPG"]),
+    ("audi-a6", "Audi A6", False, 3, ["5Z0 9004 AUDI"]),
+    ("vw-passat", "VW Passat", False, 4, ["2Z4 3277 Passat"]),
+    ("bmw", "BMW", False, 5, ["6AP 0033 BMW"]),
+]
 
 
 def normalize_name(value: str) -> str:
@@ -64,6 +73,349 @@ def normalize_time_entry_descriptions(db: Session) -> int:
     if updated_count:
         db.commit()
     return updated_count
+
+
+def ensure_fuel_schema(db: Session) -> None:
+    Base = models.FuelVehicle.metadata
+    Base.create_all(db.get_bind(), tables=[models.FuelVehicle.__table__, models.FuelEntry.__table__])
+    db.execute(text("CREATE INDEX IF NOT EXISTS idx_fuel_entries_vehicle_date ON fuel_entries(vehicle_id, purchased_on)"))
+    db.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_fuel_entries_source_row "
+            "ON fuel_entries(source, source_sheet, source_row) "
+            "WHERE source = 'excel' AND source_sheet IS NOT NULL AND source_row IS NOT NULL"
+        )
+    )
+    db.commit()
+
+
+def seed_fuel_vehicles(db: Session) -> None:
+    for code, name, is_active, sort_order, source_sheets in FUEL_VEHICLES:
+        vehicle = db.scalar(select(models.FuelVehicle).where(models.FuelVehicle.code == code))
+        if vehicle:
+            vehicle.name = name
+            vehicle.is_active = is_active
+            vehicle.sort_order = sort_order
+            vehicle.source_sheets = source_sheets
+        else:
+            db.add(
+                models.FuelVehicle(
+                    code=code,
+                    name=name,
+                    is_active=is_active,
+                    sort_order=sort_order,
+                    source_sheets=source_sheets,
+                )
+            )
+    db.commit()
+
+
+def list_fuel_vehicles(db: Session):
+    return db.scalars(select(models.FuelVehicle).order_by(models.FuelVehicle.sort_order, models.FuelVehicle.name)).all()
+
+
+def get_fuel_vehicle(db: Session, vehicle_id):
+    return db.scalar(select(models.FuelVehicle).where(models.FuelVehicle.id == vehicle_id))
+
+
+def list_fuel_entries(db: Session, vehicle_id=None, date_from: date | None = None, date_to: date | None = None, limit: int = 1000):
+    stmt = (
+        select(models.FuelEntry)
+        .options(joinedload(models.FuelEntry.vehicle))
+        .order_by(models.FuelEntry.purchased_on.desc(), models.FuelEntry.purchased_at.desc().nullslast())
+        .limit(min(limit, 10000))
+    )
+    if vehicle_id:
+        stmt = stmt.where(models.FuelEntry.vehicle_id == vehicle_id)
+    if date_from:
+        stmt = stmt.where(models.FuelEntry.purchased_on >= date_from)
+    if date_to:
+        stmt = stmt.where(models.FuelEntry.purchased_on <= date_to)
+    return db.scalars(stmt).all()
+
+
+def create_fuel_entry(db: Session, payload, receipt_photo_path: str | None = None, dashboard_photo_path: str | None = None):
+    vehicle = get_fuel_vehicle(db, payload.vehicle_id)
+    if not vehicle or not vehicle.is_active:
+        return None
+    entry = models.FuelEntry(
+        vehicle_id=payload.vehicle_id,
+        purchased_on=payload.purchased_on,
+        purchased_at=payload.purchased_at,
+        station=payload.station,
+        fuel_type=payload.fuel_type,
+        odometer_km=payload.odometer_km,
+        liters=payload.liters,
+        total_price_vat=payload.total_price_vat,
+        total_price_no_vat=payload.total_price_no_vat,
+        price_per_liter=payload.price_per_liter,
+        trip_km=payload.trip_km,
+        full_tank=payload.full_tank,
+        average_consumption=payload.average_consumption,
+        note=payload.note,
+        receipt_photo_path=receipt_photo_path,
+        dashboard_photo_path=dashboard_photo_path,
+        source="manual",
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def update_fuel_entry(db: Session, entry_id, payload):
+    entry = db.scalar(
+        select(models.FuelEntry)
+        .options(joinedload(models.FuelEntry.vehicle))
+        .where(models.FuelEntry.id == entry_id)
+    )
+    if not entry:
+        return None
+    vehicle_id = payload.vehicle_id or entry.vehicle_id
+    vehicle = get_fuel_vehicle(db, vehicle_id)
+    if not vehicle or not vehicle.is_active:
+        return None
+    for field in [
+        "purchased_on",
+        "purchased_at",
+        "station",
+        "fuel_type",
+        "odometer_km",
+        "liters",
+        "total_price_vat",
+        "total_price_no_vat",
+        "price_per_liter",
+        "trip_km",
+        "full_tank",
+        "average_consumption",
+        "note",
+    ]:
+        value = getattr(payload, field)
+        if value is not None or field in {"station", "fuel_type", "note", "purchased_at"}:
+            setattr(entry, field, value)
+    entry.vehicle_id = vehicle_id
+    entry.updated_at = datetime.now()
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def fuel_summary(db: Session, vehicle_id=None):
+    rows = list_fuel_entries(db, vehicle_id, limit=10000)
+    monthly: dict[str, dict] = {}
+    yearly: dict[str, dict] = {}
+
+    def add_item(target: dict[str, dict], key: str, label: str, level: str, entry) -> None:
+        item = target.setdefault(
+            key,
+            {
+                "period_key": key,
+                "period_label": label,
+                "level": level,
+                "liters": Decimal("0"),
+                "total_price_vat": Decimal("0"),
+                "trip_km": Decimal("0"),
+            },
+        )
+        item["liters"] += entry.liters or Decimal("0")
+        item["total_price_vat"] += entry.total_price_vat or Decimal("0")
+        item["trip_km"] += entry.trip_km or Decimal("0")
+
+    for entry in rows:
+        month_key = entry.purchased_on.strftime("%Y-%m")
+        year_key = str(entry.purchased_on.year)
+        add_item(monthly, month_key, month_key, "month", entry)
+        add_item(yearly, year_key, year_key, "year", entry)
+
+    result = []
+    for item in sorted(monthly.values(), key=lambda value: value["period_key"], reverse=True):
+        result.append({**item, "average_consumption": _average_consumption(item["liters"], item["trip_km"])})
+    for item in sorted(yearly.values(), key=lambda value: value["period_key"], reverse=True):
+        result.append({**item, "period_label": f"Soucet {item['period_label']}", "average_consumption": _average_consumption(item["liters"], item["trip_km"])})
+    return result
+
+
+def _average_consumption(liters: Decimal, trip_km: Decimal) -> Decimal | None:
+    if not trip_km:
+        return None
+    return Decimal(str(round(float(liters) / float(trip_km) * 100, 2)))
+
+
+def import_fuel_workbook(db: Session, workbook_path) -> dict:
+    import xlrd
+
+    vehicles_by_sheet = {}
+    for vehicle in list_fuel_vehicles(db):
+        for sheet_name in vehicle.source_sheets or []:
+            vehicles_by_sheet[sheet_name] = vehicle
+
+    workbook = xlrd.open_workbook(str(workbook_path))
+    imported_rows = 0
+    skipped_rows = 0
+    for sheet in workbook.sheets():
+        vehicle = vehicles_by_sheet.get(sheet.name)
+        if not vehicle:
+            continue
+        header_row = _find_fuel_header_row(sheet)
+        if header_row is None:
+            skipped_rows += sheet.nrows
+            continue
+        layout = _fuel_sheet_layout(sheet, header_row, sheet.name)
+        for row_index in range(header_row + 1, sheet.nrows):
+            parsed_date = _xlrd_date(sheet.cell(row_index, layout["date"]), workbook.datemode)
+            if not parsed_date:
+                continue
+            station = _xlrd_text(sheet.cell(row_index, layout["station"]))
+            source_fuel_type = _xlrd_text(sheet.cell(row_index, layout["fuel_type"])) if layout.get("fuel_type") is not None else None
+            fuel_type = source_fuel_type or layout.get("default_fuel_type")
+            odometer_km = _xlrd_decimal(sheet.cell(row_index, layout["odometer"]))
+            liters = _xlrd_decimal(sheet.cell(row_index, layout["liters"]))
+            total_price_vat = _xlrd_decimal(sheet.cell(row_index, layout["total_price_vat"]))
+            trip_km = _xlrd_decimal(sheet.cell(row_index, layout["trip_km"]))
+            if not any([station, source_fuel_type, odometer_km, liters, total_price_vat, trip_km]):
+                skipped_rows += 1
+                continue
+            if db.scalar(
+                select(models.FuelEntry).where(
+                    models.FuelEntry.source == "excel",
+                    models.FuelEntry.source_sheet == sheet.name,
+                    models.FuelEntry.source_row == row_index + 1,
+                )
+            ):
+                skipped_rows += 1
+                continue
+            entry = models.FuelEntry(
+                vehicle_id=vehicle.id,
+                purchased_on=parsed_date,
+                purchased_at=_xlrd_time(sheet.cell(row_index, layout["time"]), workbook.datemode) if layout.get("time") is not None else None,
+                station=station,
+                fuel_type=fuel_type,
+                odometer_km=odometer_km,
+                liters=liters,
+                total_price_vat=total_price_vat,
+                total_price_no_vat=_xlrd_decimal(sheet.cell(row_index, layout["total_price_no_vat"])),
+                price_per_liter=_xlrd_decimal(sheet.cell(row_index, layout["price_per_liter"])),
+                trip_km=trip_km,
+                full_tank=_xlrd_bool(sheet.cell(row_index, layout["full_tank"])),
+                average_consumption=_xlrd_decimal(sheet.cell(row_index, layout["average_consumption"])),
+                source="excel",
+                source_sheet=sheet.name,
+                source_row=row_index + 1,
+            )
+            db.add(entry)
+            imported_rows += 1
+    db.commit()
+    return {"imported_rows": imported_rows, "skipped_rows": skipped_rows}
+
+
+def _find_fuel_header_row(sheet) -> int | None:
+    for row_index in range(min(sheet.nrows, 20)):
+        values = [_normalize_header(sheet.cell_value(row_index, column)) for column in range(sheet.ncols)]
+        if "datum" in values and any(value.startswith("cerpaci") for value in values):
+            return row_index
+    return None
+
+
+def _fuel_sheet_layout(sheet, header_row: int, sheet_name: str) -> dict:
+    headers = [_normalize_header(sheet.cell_value(header_row, column)) for column in range(sheet.ncols)]
+    date_col = headers.index("datum")
+    has_time = date_col + 1 < len(headers) and headers[date_col + 1] == "cas"
+    has_fuel_type = any(header.startswith("druh") for header in headers)
+    offset = date_col + (2 if has_time else 1)
+    if has_fuel_type:
+        fuel_type_col = offset + 1
+        odometer_col = offset + 2
+        liters_col = offset + 3
+        total_col = offset + 4
+        no_vat_col = offset + 5
+        price_col = offset + 6
+        trip_col = offset + 7
+        full_col = offset + 8
+        average_col = offset + 9
+    else:
+        fuel_type_col = None
+        odometer_col = offset + 1
+        liters_col = offset + 2
+        total_col = offset + 3
+        no_vat_col = offset + 4
+        price_col = offset + 5
+        trip_col = offset + 6
+        full_col = offset + 7
+        average_col = offset + 8
+    return {
+        "date": date_col,
+        "time": date_col + 1 if has_time else None,
+        "station": offset,
+        "fuel_type": fuel_type_col,
+        "default_fuel_type": "LPG" if "LPG" in sheet_name.upper() else None,
+        "odometer": odometer_col,
+        "liters": liters_col,
+        "total_price_vat": total_col,
+        "total_price_no_vat": no_vat_col,
+        "price_per_liter": price_col,
+        "trip_km": trip_col,
+        "full_tank": full_col,
+        "average_consumption": average_col,
+    }
+
+
+def _normalize_header(value) -> str:
+    return normalize_name(str(value)) if value is not None else ""
+
+
+def _xlrd_text(cell) -> str | None:
+    value = str(cell.value).strip()
+    return value or None
+
+
+def _xlrd_decimal(cell) -> Decimal | None:
+    value = cell.value
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, str):
+            value = value.replace(" ", "").replace("\xa0", "").replace(",", ".")
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _xlrd_date(cell, datemode) -> date | None:
+    import xlrd
+
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        return xlrd.xldate_as_datetime(cell.value, datemode).date()
+    if isinstance(cell.value, str):
+        for date_format in ("%d.%m.%Y", "%d.%m.%y"):
+            try:
+                return datetime.strptime(cell.value.strip(), date_format).date()
+            except ValueError:
+                pass
+    return None
+
+
+def _xlrd_time(cell, datemode) -> time | None:
+    import xlrd
+
+    if cell.value in (None, ""):
+        return None
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        return xlrd.xldate_as_datetime(cell.value, datemode).time().replace(second=0, microsecond=0)
+    if isinstance(cell.value, str):
+        try:
+            return datetime.strptime(cell.value.strip(), "%H:%M").time()
+        except ValueError:
+            return None
+    return None
+
+
+def _xlrd_bool(cell) -> bool | None:
+    value = str(cell.value).strip().lower()
+    if value in {"ano", "yes", "true", "1"}:
+        return True
+    if value in {"ne", "no", "false", "0"}:
+        return False
+    return None
 
 
 def get_or_create_project(db: Session, name: str | None) -> models.Project | None:

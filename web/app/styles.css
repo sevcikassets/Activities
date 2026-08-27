@@ -384,6 +384,82 @@ h2 {
   padding: 10px;
 }
 
+.vehicleTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.vehicleTabs button {
+  background: #e7eef5;
+  color: #26374b;
+}
+
+.vehicleTabs button.active {
+  background: #15616d;
+  color: #ffffff;
+}
+
+.vehicleTabs button.inactive {
+  opacity: 0.68;
+}
+
+.vehicleTabs span {
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.fuelImportForm {
+  align-items: end;
+  background: #f8fafc;
+  border: 1px solid #e0e6ee;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(260px, 420px) auto;
+  justify-content: start;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.fuelForm {
+  background: #fbfcfd;
+  border: 1px solid #e0e6ee;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
+.fuelForm fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.fuelGrid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.compactHeader {
+  margin-bottom: 8px;
+}
+
+.disabledPanel {
+  opacity: 0.72;
+}
+
+.fuelTable {
+  max-height: 680px;
+}
+
+.fuelSubtotal.yearSubtotal {
+  background: #e4edf7;
+  color: #1d4f7a;
+}
+
 .bulkInfo {
   align-items: center;
   color: #46546a;
@@ -747,7 +823,7 @@ td {
 }
 
 @media (max-width: 1050px) {
-  .workspace, .statsOnly, .filterBar, .gridForm, .quickEntry, .summaryGrid, .statsDrilldown, .statsFilters, .categoryCards, .smallCharts, .userForm, .overheadFilters, .bulkValidityForm, .bulkCopyForm {
+  .workspace, .statsOnly, .filterBar, .gridForm, .quickEntry, .summaryGrid, .statsDrilldown, .statsFilters, .categoryCards, .smallCharts, .userForm, .overheadFilters, .bulkValidityForm, .bulkCopyForm, .fuelImportForm {
     grid-template-columns: 1fr;
   }
 

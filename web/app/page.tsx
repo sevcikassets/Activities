@@ -1,11 +1,11 @@
 "use client";
 
-import { BarChart3, CheckSquare, Copy, Download, Edit3, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
+import { BarChart3, CheckSquare, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
 import { Fragment, FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-type Section = "activities" | "statistics" | "overhead" | "users";
+type Section = "activities" | "statistics" | "fuel" | "overhead" | "users";
 type SummaryGroup = "day" | "week" | "month" | "year";
 
 type ProjectRow = {
@@ -78,6 +78,59 @@ type ActivityRow = {
   km: string | null;
   reported_status: string | null;
 };
+
+type FuelVehicle = {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  sort_order: number;
+};
+
+type FuelEntry = {
+  id: string;
+  vehicle_id: string;
+  vehicle_name: string;
+  purchased_on: string;
+  purchased_at: string | null;
+  station: string | null;
+  fuel_type: string | null;
+  odometer_km: string | null;
+  liters: string | null;
+  total_price_vat: string | null;
+  total_price_no_vat: string | null;
+  price_per_liter: string | null;
+  trip_km: string | null;
+  full_tank: boolean | null;
+  average_consumption: string | null;
+  note: string | null;
+  receipt_photo_path: string | null;
+  dashboard_photo_path: string | null;
+  source: string;
+  source_sheet: string | null;
+  source_row: number | null;
+};
+
+type FuelDraft = {
+  vehicle_id: string;
+  purchased_on: string;
+  purchased_at: string;
+  station: string;
+  fuel_type: string;
+  odometer_km: string;
+  liters: string;
+  total_price_vat: string;
+  total_price_no_vat: string;
+  price_per_liter: string;
+  trip_km: string;
+  full_tank: string;
+  average_consumption: string;
+  note: string;
+};
+
+type FuelDisplayRow =
+  | { kind: "entry"; entry: FuelEntry }
+  | { kind: "subtotal"; key: string; label: string; level: "month" | "year"; liters: string; total: string; tripKm: string; average: string };
 
 type OverheadTicket = {
   external_id: string;
@@ -159,6 +212,23 @@ const emptyDraft: EntryDraft = {
   reported_status: ""
 };
 
+const emptyFuelDraft: FuelDraft = {
+  vehicle_id: "",
+  purchased_on: today(),
+  purchased_at: "",
+  station: "",
+  fuel_type: "Natural 95",
+  odometer_km: "",
+  liters: "",
+  total_price_vat: "",
+  total_price_no_vat: "",
+  price_per_liter: "",
+  trip_km: "",
+  full_tank: "true",
+  average_consumption: "",
+  note: ""
+};
+
 const transportOptions = ["Volvo XC90", "vlak", "autobus", "MHD"];
 
 const defaultFilters: Filters = {
@@ -180,6 +250,7 @@ const categorySeries = [
 const sections: { id: Section; label: string; icon: typeof Table2; adminOnly?: boolean }[] = [
   { id: "activities", label: "Aktivity", icon: Table2 },
   { id: "statistics", label: "Statistiky", icon: BarChart3 },
+  { id: "fuel", label: "PHM", icon: Fuel },
   { id: "overhead", label: "Rezijni tikety", icon: Ticket },
   { id: "users", label: "Uzivatele", icon: Users, adminOnly: true }
 ];
@@ -273,6 +344,20 @@ function formatKm(value: string | null) {
   return Math.round(Number(value)).toString();
 }
 
+function formatNumber(value: string | number | null | undefined, digits = 2) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  return Number(value).toFixed(digits);
+}
+
+function formatBool(value: boolean | null) {
+  if (value === null) {
+    return "";
+  }
+  return value ? "Ano" : "Ne";
+}
+
 function weekdayName(value: string) {
   const names = ["Ne", "Po", "Ut", "St", "Ct", "Pa", "So"];
   const date = new Date(`${value}T12:00:00`);
@@ -335,6 +420,87 @@ function inferredCategory(projectName: string) {
 
 function addHours(left: string, right: string) {
   return (Number(left || 0) + Number(right || 0)).toFixed(2);
+}
+
+function fuelAverage(liters: number, tripKm: number) {
+  if (!tripKm) {
+    return "";
+  }
+  return ((liters / tripKm) * 100).toFixed(2);
+}
+
+function buildFuelDisplayRows(entries: FuelEntry[]): FuelDisplayRow[] {
+  const rows: FuelDisplayRow[] = [];
+  const sorted = [...entries].sort((left, right) => {
+    const dateCompare = right.purchased_on.localeCompare(left.purchased_on);
+    if (dateCompare) return dateCompare;
+    return (right.purchased_at || "").localeCompare(left.purchased_at || "");
+  });
+  let currentMonth = "";
+  let currentYear = "";
+  let monthLiters = 0;
+  let monthTotal = 0;
+  let monthTrip = 0;
+  let yearLiters = 0;
+  let yearTotal = 0;
+  let yearTrip = 0;
+
+  function pushMonth() {
+    if (!currentMonth) return;
+    rows.push({
+      kind: "subtotal",
+      key: `month-${currentMonth}`,
+      label: `Soucet mesice ${currentMonth}`,
+      level: "month",
+      liters: monthLiters.toFixed(2),
+      total: monthTotal.toFixed(2),
+      tripKm: monthTrip.toFixed(0),
+      average: fuelAverage(monthLiters, monthTrip)
+    });
+  }
+
+  function pushYear() {
+    if (!currentYear) return;
+    rows.push({
+      kind: "subtotal",
+      key: `year-${currentYear}`,
+      label: `Soucet roku ${currentYear}`,
+      level: "year",
+      liters: yearLiters.toFixed(2),
+      total: yearTotal.toFixed(2),
+      tripKm: yearTrip.toFixed(0),
+      average: fuelAverage(yearLiters, yearTrip)
+    });
+  }
+
+  for (const entry of sorted) {
+    const month = entry.purchased_on.slice(0, 7);
+    const year = entry.purchased_on.slice(0, 4);
+    if (currentMonth && currentMonth !== month) {
+      pushMonth();
+      monthLiters = 0;
+      monthTotal = 0;
+      monthTrip = 0;
+    }
+    if (currentYear && currentYear !== year) {
+      pushYear();
+      yearLiters = 0;
+      yearTotal = 0;
+      yearTrip = 0;
+    }
+    currentMonth = month;
+    currentYear = year;
+    monthLiters += Number(entry.liters || 0);
+    monthTotal += Number(entry.total_price_vat || 0);
+    monthTrip += Number(entry.trip_km || 0);
+    yearLiters += Number(entry.liters || 0);
+    yearTotal += Number(entry.total_price_vat || 0);
+    yearTrip += Number(entry.trip_km || 0);
+    rows.push({ kind: "entry", entry });
+  }
+  pushMonth();
+  pushYear();
+  return rows;
 }
 
 function quarterLabel(monthKey: string) {
@@ -424,6 +590,13 @@ export default function Home() {
   const [selectedStatsPeriod, setSelectedStatsPeriod] = useState<StatsPeriodRow | null>(null);
   const [selectedPeriodProjects, setSelectedPeriodProjects] = useState<ProjectRow[]>([]);
   const [categoryComparison, setCategoryComparison] = useState<CategoryComparison | null>(null);
+  const [fuelVehicles, setFuelVehicles] = useState<FuelVehicle[]>([]);
+  const [selectedFuelVehicleId, setSelectedFuelVehicleId] = useState("");
+  const [fuelEntries, setFuelEntries] = useState<FuelEntry[]>([]);
+  const [fuelDraft, setFuelDraft] = useState<FuelDraft>(emptyFuelDraft);
+  const [editingFuelEntryId, setEditingFuelEntryId] = useState<string | null>(null);
+  const [receiptPhoto, setReceiptPhoto] = useState<File | null>(null);
+  const [dashboardPhoto, setDashboardPhoto] = useState<File | null>(null);
   const [overheadTickets, setOverheadTickets] = useState<OverheadTicket[]>([]);
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [statsDateFrom, setStatsDateFrom] = useState(defaultStatsDateFrom);
@@ -489,6 +662,11 @@ export default function Home() {
     () => activities.filter((row) => selectedActivityIds.includes(row.id)),
     [activities, selectedActivityIds]
   );
+  const selectedFuelVehicle = useMemo(
+    () => fuelVehicles.find((vehicle) => vehicle.id === selectedFuelVehicleId) ?? null,
+    [fuelVehicles, selectedFuelVehicleId]
+  );
+  const fuelDisplayRows = useMemo(() => buildFuelDisplayRows(fuelEntries), [fuelEntries]);
   const activeActivityFilterCount = useMemo(
     () => Object.values(filters).filter(Boolean).length,
     [filters]
@@ -575,6 +753,27 @@ export default function Home() {
     setOverheadTickets(await response.json());
   }
 
+  async function loadFuelVehicles() {
+    const response = await apiFetch("/fuel/vehicles");
+    const vehicles = await response.json() as FuelVehicle[];
+    setFuelVehicles(vehicles);
+    const nextSelected = selectedFuelVehicleId || vehicles.find((vehicle) => vehicle.is_active)?.id || vehicles[0]?.id || "";
+    setSelectedFuelVehicleId(nextSelected);
+    if (nextSelected) {
+      setFuelDraft((current) => ({ ...current, vehicle_id: current.vehicle_id || nextSelected }));
+      await loadFuelEntries(nextSelected);
+    }
+  }
+
+  async function loadFuelEntries(vehicleId = selectedFuelVehicleId) {
+    if (!vehicleId) {
+      setFuelEntries([]);
+      return;
+    }
+    const response = await apiFetch(`/fuel/entries?${buildQuery({ vehicle_id: vehicleId, limit: "5000" })}`);
+    setFuelEntries(await response.json());
+  }
+
   async function loadCurrentUser() {
     const response = await apiFetch("/auth/me");
     const user = await response.json();
@@ -589,7 +788,7 @@ export default function Home() {
 
   async function refreshAll() {
     const user = currentUser ?? await loadCurrentUser();
-    const requests = [loadActivities(), loadStats(), loadOverheadTickets(), loadCategoryComparison()];
+    const requests = [loadActivities(), loadStats(), loadOverheadTickets(), loadCategoryComparison(), loadFuelVehicles()];
     if (user.role === "admin") {
       requests.push(loadUsers());
     }
@@ -670,6 +869,80 @@ export default function Home() {
     setTextEntry(nextTextPrefix);
     setTextEntryRecognized(false);
     await Promise.all([loadActivities(), loadStats(), loadCategoryComparison()]);
+  }
+
+  async function saveFuelEntry(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedFuelVehicle?.is_active) {
+      setMessage("Pro neaktivni vozidlo nelze pridavat ani upravovat PHM.");
+      return;
+    }
+    if (editingFuelEntryId) {
+      const response = await apiFetch(`/fuel/entries/${editingFuelEntryId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...fuelDraft,
+          vehicle_id: fuelDraft.vehicle_id,
+          purchased_at: fuelDraft.purchased_at || null,
+          station: fuelDraft.station || null,
+          fuel_type: fuelDraft.fuel_type || null,
+          odometer_km: fuelDraft.odometer_km || null,
+          liters: fuelDraft.liters || null,
+          total_price_vat: fuelDraft.total_price_vat || null,
+          total_price_no_vat: fuelDraft.total_price_no_vat || null,
+          price_per_liter: fuelDraft.price_per_liter || null,
+          trip_km: fuelDraft.trip_km || null,
+          full_tank: fuelDraft.full_tank === "" ? null : fuelDraft.full_tank === "true",
+          average_consumption: fuelDraft.average_consumption || null,
+          note: fuelDraft.note || null
+        })
+      });
+      if (!response.ok) {
+        setMessage("Zaznam PHM se nepodarilo upravit.");
+        return;
+      }
+      setMessage("Zaznam PHM upraven.");
+    } else {
+      const form = new FormData();
+      Object.entries(fuelDraft).forEach(([key, value]) => {
+        if (value) form.set(key, value);
+      });
+      if (receiptPhoto) form.set("receipt_photo", receiptPhoto);
+      if (dashboardPhoto) form.set("dashboard_photo", dashboardPhoto);
+      const response = await apiFetch("/fuel/entries", { method: "POST", body: form });
+      if (!response.ok) {
+        setMessage("Zaznam PHM se nepodarilo ulozit.");
+        return;
+      }
+      setMessage("Zaznam PHM ulozen.");
+    }
+    setEditingFuelEntryId(null);
+    setReceiptPhoto(null);
+    setDashboardPhoto(null);
+    setFuelDraft({ ...emptyFuelDraft, vehicle_id: selectedFuelVehicleId, purchased_on: today() });
+    await loadFuelEntries(selectedFuelVehicleId);
+  }
+
+  async function importFuelExcel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const fileInput = event.currentTarget.elements.namedItem("fuelFile") as HTMLInputElement | null;
+    const file = fileInput?.files?.[0];
+    if (!file) {
+      setMessage("Vyberte soubor PHM k importu.");
+      return;
+    }
+    const form = new FormData();
+    form.set("file", file);
+    const response = await apiFetch("/fuel/imports/excel", { method: "POST", body: form });
+    if (!response.ok) {
+      setMessage("Import PHM se nepodaril.");
+      return;
+    }
+    const result = await response.json();
+    setMessage(`Import PHM dokoncen: ${result.imported_rows} radku, preskoceno ${result.skipped_rows}.`);
+    await loadFuelEntries(selectedFuelVehicleId);
+    fileInput.value = "";
   }
 
   async function parseTextEntry() {
@@ -971,6 +1244,58 @@ export default function Home() {
   function cancelEdit() {
     setEditingEntryId(null);
     setDraft({ ...emptyDraft, spent_on: draft.spent_on });
+  }
+
+  async function selectFuelVehicle(vehicleId: string) {
+    setSelectedFuelVehicleId(vehicleId);
+    setFuelDraft({ ...emptyFuelDraft, vehicle_id: vehicleId, purchased_on: today() });
+    setEditingFuelEntryId(null);
+    await loadFuelEntries(vehicleId);
+  }
+
+  function updateFuelDraft(changes: Partial<FuelDraft>) {
+    setFuelDraft((current) => {
+      const next = { ...current, ...changes };
+      const liters = Number(next.liters || 0);
+      const total = Number(next.total_price_vat || 0);
+      const tripKm = Number(next.trip_km || 0);
+      if (liters && total && !changes.price_per_liter) {
+        next.price_per_liter = (total / liters).toFixed(2);
+      }
+      if (liters && tripKm && !changes.average_consumption) {
+        next.average_consumption = ((liters / tripKm) * 100).toFixed(2);
+      }
+      return next;
+    });
+  }
+
+  function editFuelRow(row: FuelEntry) {
+    setEditingFuelEntryId(row.id);
+    setFuelDraft({
+      vehicle_id: row.vehicle_id,
+      purchased_on: row.purchased_on,
+      purchased_at: timeValue(row.purchased_at),
+      station: row.station ?? "",
+      fuel_type: row.fuel_type ?? "",
+      odometer_km: row.odometer_km ?? "",
+      liters: row.liters ?? "",
+      total_price_vat: row.total_price_vat ?? "",
+      total_price_no_vat: row.total_price_no_vat ?? "",
+      price_per_liter: row.price_per_liter ?? "",
+      trip_km: row.trip_km ?? "",
+      full_tank: row.full_tank === null ? "" : String(row.full_tank),
+      average_consumption: row.average_consumption ?? "",
+      note: row.note ?? ""
+    });
+    setReceiptPhoto(null);
+    setDashboardPhoto(null);
+  }
+
+  function cancelFuelEdit() {
+    setEditingFuelEntryId(null);
+    setFuelDraft({ ...emptyFuelDraft, vehicle_id: selectedFuelVehicleId, purchased_on: today() });
+    setReceiptPhoto(null);
+    setDashboardPhoto(null);
   }
 
   const visibleSections = sections.filter((item) => !item.adminOnly || currentUser?.role === "admin");
@@ -1292,6 +1617,116 @@ export default function Home() {
                   </table>
                 </div>
               </div>
+            </div>
+          </section>
+        )}
+
+        {section === "fuel" && (
+          <section className="panel widePanel">
+            <div className="panelHeader">
+              <div>
+                <h2>Evidence PHM</h2>
+                <p className="muted">Vozidla, tankovani, fotky uctenek a mesicni/rocni mezisoucty.</p>
+              </div>
+              <Fuel size={18} />
+            </div>
+
+            <div className="vehicleTabs">
+              {fuelVehicles.map((vehicle) => (
+                <button
+                  key={vehicle.id}
+                  type="button"
+                  className={`${selectedFuelVehicleId === vehicle.id ? "active" : ""} ${vehicle.is_active ? "" : "inactive"}`}
+                  onClick={() => selectFuelVehicle(vehicle.id)}
+                  title={vehicle.is_active ? "Aktivni vozidlo" : "Neaktivni vozidlo jen pro prohlizeni"}
+                >
+                  {vehicle.name}
+                  {!vehicle.is_active && <span>neaktivni</span>}
+                </button>
+              ))}
+            </div>
+
+            {currentUser?.role === "admin" && (
+              <form className="fuelImportForm" onSubmit={importFuelExcel}>
+                <label>Import PHM z Excelu<input name="fuelFile" type="file" accept=".xls" /></label>
+                <button type="submit"><Download size={18} /> Importovat</button>
+              </form>
+            )}
+
+            {selectedFuelVehicle && (
+              <form className={`fuelForm ${selectedFuelVehicle.is_active ? "" : "disabledPanel"}`} onSubmit={saveFuelEntry}>
+                <div className="panelHeader compactHeader">
+                  <div>
+                    <h3>{editingFuelEntryId ? "Uprava tankovani" : "Nove tankovani"} - {selectedFuelVehicle.name}</h3>
+                    {!selectedFuelVehicle.is_active && <p className="muted">Vozidlo je neaktivni, nove zaznamy ani upravy nejsou povolene.</p>}
+                  </div>
+                  {editingFuelEntryId && <button type="button" className="secondary" onClick={cancelFuelEdit}><X size={18} /> Zrusit</button>}
+                </div>
+                <fieldset disabled={!selectedFuelVehicle.is_active}>
+                  <div className="gridForm fuelGrid">
+                    <label>Datum<input type="date" value={fuelDraft.purchased_on} onChange={(e) => updateFuelDraft({ purchased_on: e.target.value })} /></label>
+                    <label>Cas<input type="time" value={fuelDraft.purchased_at} onChange={(e) => updateFuelDraft({ purchased_at: e.target.value })} /></label>
+                    <label>Cerpaci stanice<input value={fuelDraft.station} onChange={(e) => updateFuelDraft({ station: e.target.value })} /></label>
+                    <label>Palivo<input value={fuelDraft.fuel_type} onChange={(e) => updateFuelDraft({ fuel_type: e.target.value })} /></label>
+                    <label>Stav km<input type="number" step="1" value={fuelDraft.odometer_km} onChange={(e) => updateFuelDraft({ odometer_km: e.target.value })} /></label>
+                    <label>Litru<input type="number" step="0.01" value={fuelDraft.liters} onChange={(e) => updateFuelDraft({ liters: e.target.value })} /></label>
+                    <label>Cena s DPH<input type="number" step="0.01" value={fuelDraft.total_price_vat} onChange={(e) => updateFuelDraft({ total_price_vat: e.target.value })} /></label>
+                    <label>Cena bez DPH<input type="number" step="0.01" value={fuelDraft.total_price_no_vat} onChange={(e) => updateFuelDraft({ total_price_no_vat: e.target.value })} /></label>
+                    <label>Cena/l<input type="number" step="0.01" value={fuelDraft.price_per_liter} onChange={(e) => updateFuelDraft({ price_per_liter: e.target.value })} /></label>
+                    <label>Ujeto km<input type="number" step="1" value={fuelDraft.trip_km} onChange={(e) => updateFuelDraft({ trip_km: e.target.value })} /></label>
+                    <label>Plna nadrz<select value={fuelDraft.full_tank} onChange={(e) => updateFuelDraft({ full_tank: e.target.value })}><option value="">-</option><option value="true">Ano</option><option value="false">Ne</option></select></label>
+                    <label>Spotreba<input type="number" step="0.01" value={fuelDraft.average_consumption} onChange={(e) => updateFuelDraft({ average_consumption: e.target.value })} /></label>
+                    {!editingFuelEntryId && <label>Fotka uctenky<input type="file" accept="image/*" onChange={(e) => setReceiptPhoto(e.target.files?.[0] ?? null)} /></label>}
+                    {!editingFuelEntryId && <label>Fotka palubky<input type="file" accept="image/*" onChange={(e) => setDashboardPhoto(e.target.files?.[0] ?? null)} /></label>}
+                  </div>
+                  <label>Poznamka<textarea value={fuelDraft.note} onChange={(e) => updateFuelDraft({ note: e.target.value })} /></label>
+                  <div className="actions">
+                    <button type="submit"><Save size={18} /> {editingFuelEntryId ? "Ulozit zmeny" : "Pridat PHM"}</button>
+                  </div>
+                </fieldset>
+              </form>
+            )}
+
+            <div className="tableWrap fuelTable">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Datum</th><th>Cas</th><th>Cerpaci stanice</th><th>Palivo</th><th>Stav km</th><th>Litru</th><th>Cena</th><th>Cena/l</th><th>Ujeto</th><th>Plna</th><th>Spotreba</th><th>Zdroj</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fuelDisplayRows.map((row) => row.kind === "subtotal" ? (
+                    <tr className={`subtotalRow fuelSubtotal ${row.level === "year" ? "yearSubtotal" : ""}`} key={row.key}>
+                      <td colSpan={5}>{row.label}</td>
+                      <td>{row.liters}</td>
+                      <td>{row.total}</td>
+                      <td></td>
+                      <td>{row.tripKm}</td>
+                      <td></td>
+                      <td>{row.average}</td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  ) : (
+                    <tr key={row.entry.id}>
+                      <td>{row.entry.purchased_on}</td>
+                      <td>{timeValue(row.entry.purchased_at)}</td>
+                      <td>{row.entry.station}</td>
+                      <td>{row.entry.fuel_type}</td>
+                      <td>{formatKm(row.entry.odometer_km)}</td>
+                      <td>{formatNumber(row.entry.liters)}</td>
+                      <td>{formatNumber(row.entry.total_price_vat)}</td>
+                      <td>{formatNumber(row.entry.price_per_liter)}</td>
+                      <td>{formatKm(row.entry.trip_km)}</td>
+                      <td>{formatBool(row.entry.full_tank)}</td>
+                      <td>{formatNumber(row.entry.average_consumption)}</td>
+                      <td>{row.entry.source}</td>
+                      <td className="rowActions">
+                        <button className="iconButton secondary" disabled={!selectedFuelVehicle?.is_active} onClick={() => editFuelRow(row.entry)} title="Upravit PHM"><Edit3 size={16} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         )}

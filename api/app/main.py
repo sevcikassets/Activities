@@ -2,9 +2,9 @@ from pathlib import Path
 from decimal import Decimal
 from io import BytesIO
 from tempfile import NamedTemporaryFile
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
@@ -18,8 +18,15 @@ from app.excel_import import import_workbook
 from app.repository import (
     category_comparison,
     category_period_summary,
+    create_fuel_entry,
     create_time_entry,
     delete_time_entry,
+    ensure_fuel_schema,
+    fuel_summary,
+    get_fuel_vehicle,
+    import_fuel_workbook,
+    list_fuel_entries,
+    list_fuel_vehicles,
     list_overhead_tickets,
     list_time_entries,
     monthly_summary,
@@ -27,6 +34,8 @@ from app.repository import (
     parse_text_entry,
     period_summary,
     project_summary,
+    seed_fuel_vehicles,
+    update_fuel_entry,
     update_time_entry,
     update_overhead_ticket_validity,
 )
@@ -35,6 +44,12 @@ from app.schemas import (
     CategoryComparisonOut,
     CategoryPeriodRow,
     CurrentUserOut,
+    FuelEntryCreate,
+    FuelEntryOut,
+    FuelEntryUpdate,
+    FuelImportResponse,
+    FuelSummaryRow,
+    FuelVehicleOut,
     LoginRequest,
     LoginResponse,
     OverheadTicketOut,
@@ -69,7 +84,9 @@ app.add_middleware(
 @app.on_event("startup")
 def startup() -> None:
     with SessionLocal() as db:
+        ensure_fuel_schema(db)
         bootstrap_admin_user(db)
+        seed_fuel_vehicles(db)
         normalize_time_entry_descriptions(db)
 
 
@@ -106,6 +123,55 @@ def serialize_entry(entry: models.TimeEntry) -> TimeEntryOut:
         km=entry.km,
         reported_status=entry.reported_status,
     )
+
+
+def serialize_fuel_entry(entry: models.FuelEntry) -> FuelEntryOut:
+    return FuelEntryOut(
+        id=entry.id,
+        vehicle_id=entry.vehicle_id,
+        vehicle_name=entry.vehicle.name,
+        purchased_on=entry.purchased_on,
+        purchased_at=entry.purchased_at,
+        station=entry.station,
+        fuel_type=entry.fuel_type,
+        odometer_km=entry.odometer_km,
+        liters=entry.liters,
+        total_price_vat=entry.total_price_vat,
+        total_price_no_vat=entry.total_price_no_vat,
+        price_per_liter=entry.price_per_liter,
+        trip_km=entry.trip_km,
+        full_tank=entry.full_tank,
+        average_consumption=entry.average_consumption,
+        note=entry.note,
+        receipt_photo_path=entry.receipt_photo_path,
+        dashboard_photo_path=entry.dashboard_photo_path,
+        source=entry.source,
+        source_sheet=entry.source_sheet,
+        source_row=entry.source_row,
+    )
+
+
+def decimal_or_none(value: str | None) -> Decimal | None:
+    if not value:
+        return None
+    return Decimal(value.replace(",", "."))
+
+
+def bool_or_none(value: str | None) -> bool | None:
+    if value in (None, ""):
+        return None
+    return value.lower() in {"true", "1", "ano", "yes"}
+
+
+async def save_upload(file: UploadFile | None, prefix: str) -> str | None:
+    if not file or not file.filename:
+        return None
+    upload_dir = Path("/app/uploads/fuel")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = "".join(char if char.isalnum() or char in ".-_" else "_" for char in file.filename)
+    target = upload_dir / f"{prefix}-{safe_name}"
+    target.write_bytes(await file.read())
+    return str(target)
 
 
 @app.get("/health")
@@ -284,6 +350,129 @@ def parse_time_entry_text(
         matched_ticket=parsed["matched_ticket"],
         confidence_notes=parsed["confidence_notes"],
     )
+
+
+@app.get("/fuel/vehicles", response_model=list[FuelVehicleOut])
+def get_fuel_vehicles(
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_user),
+) -> list[FuelVehicleOut]:
+    return [
+        FuelVehicleOut(
+            id=vehicle.id,
+            code=vehicle.code,
+            name=vehicle.name,
+            is_active=vehicle.is_active,
+            sort_order=vehicle.sort_order,
+        )
+        for vehicle in list_fuel_vehicles(db)
+    ]
+
+
+@app.get("/fuel/entries", response_model=list[FuelEntryOut])
+def get_fuel_entries(
+    vehicle_id: UUID | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 1000,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_user),
+) -> list[FuelEntryOut]:
+    from datetime import date
+
+    parsed_from = date.fromisoformat(date_from) if date_from else None
+    parsed_to = date.fromisoformat(date_to) if date_to else None
+    return [serialize_fuel_entry(entry) for entry in list_fuel_entries(db, vehicle_id, parsed_from, parsed_to, limit)]
+
+
+@app.get("/fuel/summary", response_model=list[FuelSummaryRow])
+def get_fuel_summary(
+    vehicle_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_user),
+) -> list[FuelSummaryRow]:
+    return [FuelSummaryRow(**row) for row in fuel_summary(db, vehicle_id)]
+
+
+@app.post("/fuel/entries", response_model=FuelEntryOut)
+async def add_fuel_entry(
+    vehicle_id: UUID = Form(...),
+    purchased_on: str = Form(...),
+    purchased_at: str | None = Form(None),
+    station: str | None = Form(None),
+    fuel_type: str | None = Form(None),
+    odometer_km: str | None = Form(None),
+    liters: str | None = Form(None),
+    total_price_vat: str | None = Form(None),
+    total_price_no_vat: str | None = Form(None),
+    price_per_liter: str | None = Form(None),
+    trip_km: str | None = Form(None),
+    full_tank: str | None = Form(None),
+    average_consumption: str | None = Form(None),
+    note: str | None = Form(None),
+    receipt_photo: UploadFile | None = File(None),
+    dashboard_photo: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> FuelEntryOut:
+    from datetime import date, time
+
+    prefix = str(uuid4())
+    payload = FuelEntryCreate(
+        vehicle_id=vehicle_id,
+        purchased_on=date.fromisoformat(purchased_on),
+        purchased_at=time.fromisoformat(purchased_at) if purchased_at else None,
+        station=station,
+        fuel_type=fuel_type,
+        odometer_km=decimal_or_none(odometer_km),
+        liters=decimal_or_none(liters),
+        total_price_vat=decimal_or_none(total_price_vat),
+        total_price_no_vat=decimal_or_none(total_price_no_vat),
+        price_per_liter=decimal_or_none(price_per_liter),
+        trip_km=decimal_or_none(trip_km),
+        full_tank=bool_or_none(full_tank),
+        average_consumption=decimal_or_none(average_consumption),
+        note=note,
+    )
+    entry = create_fuel_entry(
+        db,
+        payload,
+        await save_upload(receipt_photo, f"{prefix}-receipt"),
+        await save_upload(dashboard_photo, f"{prefix}-dashboard"),
+    )
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Vehicle is not active.")
+    return serialize_fuel_entry(entry)
+
+
+@app.put("/fuel/entries/{entry_id}", response_model=FuelEntryOut)
+def edit_fuel_entry(
+    entry_id: UUID,
+    payload: FuelEntryUpdate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> FuelEntryOut:
+    entry = update_fuel_entry(db, entry_id, payload)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fuel entry not found or vehicle is inactive.")
+    return serialize_fuel_entry(entry)
+
+
+@app.post("/fuel/imports/excel", response_model=FuelImportResponse)
+async def import_fuel_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_admin),
+) -> FuelImportResponse:
+    suffix = Path(file.filename or "phm.xls").suffix or ".xls"
+    with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp_path = Path(tmp.name)
+    try:
+        result = import_fuel_workbook(db, tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return FuelImportResponse(**result)
 
 
 @app.get("/overhead-tickets", response_model=list[OverheadTicketOut])

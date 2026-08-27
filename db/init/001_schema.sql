@@ -85,13 +85,52 @@ CREATE TABLE IF NOT EXISTS import_batches (
     finished_at timestamptz
 );
 
+CREATE TABLE IF NOT EXISTS fuel_vehicles (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    code text NOT NULL UNIQUE,
+    name text NOT NULL UNIQUE,
+    is_active boolean NOT NULL DEFAULT false,
+    sort_order integer NOT NULL DEFAULT 0,
+    source_sheets jsonb NOT NULL DEFAULT '[]'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fuel_entries (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    vehicle_id uuid NOT NULL REFERENCES fuel_vehicles(id),
+    purchased_on date NOT NULL,
+    purchased_at time,
+    station text,
+    fuel_type text,
+    odometer_km numeric(12, 2),
+    liters numeric(10, 2),
+    total_price_vat numeric(12, 2),
+    total_price_no_vat numeric(12, 2),
+    price_per_liter numeric(10, 2),
+    trip_km numeric(10, 2),
+    full_tank boolean,
+    average_consumption numeric(8, 2),
+    note text,
+    receipt_photo_path text,
+    dashboard_photo_path text,
+    source text NOT NULL DEFAULT 'manual',
+    source_sheet text,
+    source_row integer,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_time_entries_spent_on ON time_entries(spent_on);
 CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id);
 CREATE INDEX IF NOT EXISTS idx_time_entries_ticket ON time_entries(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_validity ON tickets(valid_from, valid_to);
+CREATE INDEX IF NOT EXISTS idx_fuel_entries_vehicle_date ON fuel_entries(vehicle_id, purchased_on);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_time_entries_source_row
     ON time_entries(source, source_row)
     WHERE source_row IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fuel_entries_source_row
+    ON fuel_entries(source, source_sheet, source_row)
+    WHERE source = 'excel' AND source_sheet IS NOT NULL AND source_row IS NOT NULL;
 
 INSERT INTO categories (code, name, description) VALUES
     ('S', 'Soukrome', 'Soukrome aktivity'),
@@ -110,3 +149,15 @@ INSERT INTO transports (name) VALUES
     ('autobus'),
     ('MHD')
 ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO fuel_vehicles (code, name, is_active, sort_order, source_sheets) VALUES
+    ('volvo-xc90', 'Volvo', true, 1, '["EL6 14DE XC90"]'::jsonb),
+    ('skoda-felicie', 'Skoda Felicie', false, 2, '["ZLI 89-51 Natural 95", "ZLI 89-51 LPG"]'::jsonb),
+    ('audi-a6', 'Audi A6', false, 3, '["5Z0 9004 AUDI"]'::jsonb),
+    ('vw-passat', 'VW Passat', false, 4, '["2Z4 3277 Passat"]'::jsonb),
+    ('bmw', 'BMW', false, 5, '["6AP 0033 BMW"]'::jsonb)
+ON CONFLICT (code) DO UPDATE SET
+    name = EXCLUDED.name,
+    is_active = EXCLUDED.is_active,
+    sort_order = EXCLUDED.sort_order,
+    source_sheets = EXCLUDED.source_sheets;
