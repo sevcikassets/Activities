@@ -207,6 +207,12 @@ class FuelImportResponse(BaseModel):
     skipped_rows: int
 
 
+class FuelPhotoParseResponse(BaseModel):
+    draft: dict
+    confidence_notes: list[str]
+    raw_text: str
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str

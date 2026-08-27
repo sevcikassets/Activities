@@ -600,6 +600,7 @@ export default function Home() {
   const [editingFuelEntryId, setEditingFuelEntryId] = useState<string | null>(null);
   const [receiptPhoto, setReceiptPhoto] = useState<File | null>(null);
   const [dashboardPhoto, setDashboardPhoto] = useState<File | null>(null);
+  const [isParsingFuelPhotos, setIsParsingFuelPhotos] = useState(false);
   const [overheadTickets, setOverheadTickets] = useState<OverheadTicket[]>([]);
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [statsDateFrom, setStatsDateFrom] = useState(defaultStatsDateFrom);
@@ -927,6 +928,29 @@ export default function Home() {
     await loadFuelEntries(selectedFuelVehicleId);
   }
 
+  async function parseFuelPhotos() {
+    if (!receiptPhoto && !dashboardPhoto) {
+      setMessage("Vyberte fotku uctenky nebo palubni desky.");
+      return;
+    }
+    const form = new FormData();
+    if (receiptPhoto) form.set("receipt_photo", receiptPhoto);
+    if (dashboardPhoto) form.set("dashboard_photo", dashboardPhoto);
+    setIsParsingFuelPhotos(true);
+    try {
+      const response = await apiFetch("/fuel/parse-photos", { method: "POST", body: form });
+      const result = await response.json();
+      if (!response.ok) {
+        setMessage(result.detail || "Fotky se nepodarilo rozpoznat.");
+        return;
+      }
+      updateFuelDraft(result.draft);
+      setMessage(result.confidence_notes?.join(" ") || "Fotky byly rozpoznany.");
+    } finally {
+      setIsParsingFuelPhotos(false);
+    }
+  }
+
   async function parseTextEntry() {
     if (!textEntry.trim()) {
       setMessage("Zadejte text aktivity k rozpoznani.");
@@ -1240,15 +1264,72 @@ export default function Home() {
       const next = { ...current, ...changes };
       const liters = Number(next.liters || 0);
       const total = Number(next.total_price_vat || 0);
+      const pricePerLiter = Number(next.price_per_liter || 0);
       const tripKm = Number(next.trip_km || 0);
-      if (liters && total && !changes.price_per_liter) {
+      const odometer = Number(next.odometer_km || 0);
+      if (liters && pricePerLiter && !changes.total_price_vat) {
+        next.total_price_vat = (liters * pricePerLiter).toFixed(2);
+      } else if (liters && total && !changes.price_per_liter) {
         next.price_per_liter = (total / liters).toFixed(2);
       }
-      if (liters && tripKm && !changes.average_consumption) {
-        next.average_consumption = ((liters / tripKm) * 100).toFixed(2);
+      if (odometer && !changes.trip_km) {
+        const previous = previousFuelEntry(next, editingFuelEntryId);
+        if (previous?.odometer_km && odometer > Number(previous.odometer_km)) {
+          next.trip_km = (odometer - Number(previous.odometer_km)).toFixed(0);
+        }
+      }
+      const calculatedTripKm = Number(next.trip_km || tripKm || 0);
+      if (next.full_tank !== "true") {
+        next.average_consumption = "";
+      } else if (liters && calculatedTripKm && !changes.average_consumption) {
+        const accumulated = accumulatedLitersSinceFull(next, editingFuelEntryId);
+        const previousFull = previousFullFuelEntry(next, editingFuelEntryId);
+        const kmSinceFull = previousFull?.odometer_km && odometer > Number(previousFull.odometer_km)
+          ? odometer - Number(previousFull.odometer_km)
+          : calculatedTripKm;
+        next.average_consumption = ((accumulated / kmSinceFull) * 100).toFixed(2);
       }
       return next;
     });
+  }
+
+  function previousFuelEntry(draftValue: FuelDraft, excludedId: string | null) {
+    const currentTime = draftValue.purchased_at || "23:59";
+    return [...fuelEntries]
+      .filter((entry) => entry.id !== excludedId && entry.odometer_km)
+      .filter((entry) => entry.purchased_on < draftValue.purchased_on || (entry.purchased_on === draftValue.purchased_on && (entry.purchased_at || "00:00") < currentTime))
+      .sort((left, right) => {
+        const dateCompare = right.purchased_on.localeCompare(left.purchased_on);
+        if (dateCompare) return dateCompare;
+        return (right.purchased_at || "").localeCompare(left.purchased_at || "");
+      })[0];
+  }
+
+  function previousFullFuelEntry(draftValue: FuelDraft, excludedId: string | null) {
+    const currentTime = draftValue.purchased_at || "23:59";
+    return [...fuelEntries]
+      .filter((entry) => entry.id !== excludedId && entry.full_tank === true && entry.odometer_km)
+      .filter((entry) => entry.purchased_on < draftValue.purchased_on || (entry.purchased_on === draftValue.purchased_on && (entry.purchased_at || "00:00") < currentTime))
+      .sort((left, right) => {
+        const dateCompare = right.purchased_on.localeCompare(left.purchased_on);
+        if (dateCompare) return dateCompare;
+        return (right.purchased_at || "").localeCompare(left.purchased_at || "");
+      })[0];
+  }
+
+  function accumulatedLitersSinceFull(draftValue: FuelDraft, excludedId: string | null) {
+    const previousFull = previousFullFuelEntry(draftValue, excludedId);
+    const currentTime = draftValue.purchased_at || "23:59";
+    const previousFullKey = previousFull ? `${previousFull.purchased_on}T${previousFull.purchased_at || "00:00"}` : "";
+    const currentKey = `${draftValue.purchased_on}T${currentTime}`;
+    const previousLiters = fuelEntries
+      .filter((entry) => entry.id !== excludedId && entry.liters)
+      .filter((entry) => {
+        const key = `${entry.purchased_on}T${entry.purchased_at || "00:00"}`;
+        return key > previousFullKey && key < currentKey;
+      })
+      .reduce((sum, entry) => sum + Number(entry.liters || 0), 0);
+    return previousLiters + Number(draftValue.liters || 0);
   }
 
   function editFuelRow(row: FuelEntry) {
@@ -1654,6 +1735,13 @@ export default function Home() {
                     {!editingFuelEntryId && <label>Fotka uctenky<input type="file" accept="image/*" onChange={(e) => setReceiptPhoto(e.target.files?.[0] ?? null)} /></label>}
                     {!editingFuelEntryId && <label>Fotka palubky<input type="file" accept="image/*" onChange={(e) => setDashboardPhoto(e.target.files?.[0] ?? null)} /></label>}
                   </div>
+                  {!editingFuelEntryId && (
+                    <div className="actions">
+                      <button type="button" className="secondary" disabled={isParsingFuelPhotos || (!receiptPhoto && !dashboardPhoto)} onClick={parseFuelPhotos}>
+                        <Search size={18} /> {isParsingFuelPhotos ? "Rozpoznavam..." : "Rozpoznat fotky"}
+                      </button>
+                    </div>
+                  )}
                   <label>Poznamka<textarea value={fuelDraft.note} onChange={(e) => updateFuelDraft({ note: e.target.value })} /></label>
                   <div className="actions">
                     <button type="submit"><Save size={18} /> {editingFuelEntryId ? "Ulozit zmeny" : "Pridat PHM"}</button>

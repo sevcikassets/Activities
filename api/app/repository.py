@@ -138,27 +138,29 @@ def create_fuel_entry(db: Session, payload, receipt_photo_path: str | None = Non
     vehicle = get_fuel_vehicle(db, payload.vehicle_id)
     if not vehicle or not vehicle.is_active:
         return None
+    normalized = _fuel_payload_with_calculations(db, payload.vehicle_id, payload)
     entry = models.FuelEntry(
-        vehicle_id=payload.vehicle_id,
-        purchased_on=payload.purchased_on,
-        purchased_at=payload.purchased_at,
-        station=payload.station,
-        fuel_type=payload.fuel_type,
-        odometer_km=payload.odometer_km,
-        liters=payload.liters,
-        total_price_vat=payload.total_price_vat,
-        total_price_no_vat=payload.total_price_no_vat,
-        price_per_liter=payload.price_per_liter,
-        trip_km=payload.trip_km,
-        full_tank=payload.full_tank,
-        average_consumption=payload.average_consumption,
-        note=payload.note,
+        vehicle_id=normalized["vehicle_id"],
+        purchased_on=normalized["purchased_on"],
+        purchased_at=normalized["purchased_at"],
+        station=normalized["station"],
+        fuel_type=normalized["fuel_type"],
+        odometer_km=normalized["odometer_km"],
+        liters=normalized["liters"],
+        total_price_vat=normalized["total_price_vat"],
+        total_price_no_vat=normalized["total_price_no_vat"],
+        price_per_liter=normalized["price_per_liter"],
+        trip_km=normalized["trip_km"],
+        full_tank=normalized["full_tank"],
+        average_consumption=normalized["average_consumption"],
+        note=normalized["note"],
         receipt_photo_path=receipt_photo_path,
         dashboard_photo_path=dashboard_photo_path,
         source="manual",
     )
     db.add(entry)
     db.commit()
+    recalculate_fuel_vehicle(db, payload.vehicle_id)
     db.refresh(entry)
     return entry
 
@@ -175,6 +177,7 @@ def update_fuel_entry(db: Session, entry_id, payload):
     vehicle = get_fuel_vehicle(db, vehicle_id)
     if not vehicle or not vehicle.is_active:
         return None
+    changed_fields = payload.model_fields_set
     for field in [
         "purchased_on",
         "purchased_at",
@@ -190,14 +193,128 @@ def update_fuel_entry(db: Session, entry_id, payload):
         "average_consumption",
         "note",
     ]:
+        if field not in changed_fields:
+            continue
         value = getattr(payload, field)
-        if value is not None or field in {"station", "fuel_type", "note", "purchased_at"}:
-            setattr(entry, field, value)
+        setattr(entry, field, value)
     entry.vehicle_id = vehicle_id
+    _apply_fuel_entry_calculations(db, entry)
     entry.updated_at = datetime.now()
     db.commit()
+    recalculate_fuel_vehicle(db, vehicle_id)
     db.refresh(entry)
     return entry
+
+
+def _fuel_payload_with_calculations(db: Session, vehicle_id, payload) -> dict:
+    values = {
+        field: getattr(payload, field)
+        for field in [
+            "vehicle_id",
+            "purchased_on",
+            "purchased_at",
+            "station",
+            "fuel_type",
+            "odometer_km",
+            "liters",
+            "total_price_vat",
+            "total_price_no_vat",
+            "price_per_liter",
+            "trip_km",
+            "full_tank",
+            "average_consumption",
+            "note",
+        ]
+    }
+    values["vehicle_id"] = vehicle_id
+    if values["total_price_vat"] is None and values["liters"] and values["price_per_liter"]:
+        values["total_price_vat"] = _round_decimal(values["liters"] * values["price_per_liter"])
+    if values["price_per_liter"] is None and values["liters"] and values["total_price_vat"]:
+        values["price_per_liter"] = _round_decimal(values["total_price_vat"] / values["liters"])
+    if values["trip_km"] is None and values["odometer_km"]:
+        previous = _previous_fuel_entry(db, vehicle_id, values["purchased_on"], values["purchased_at"])
+        if previous and previous.odometer_km and values["odometer_km"] > previous.odometer_km:
+            values["trip_km"] = values["odometer_km"] - previous.odometer_km
+    if values["full_tank"] is not True:
+        values["average_consumption"] = None
+    elif values["average_consumption"] is None and values["liters"] and values["trip_km"]:
+        values["average_consumption"] = _average_consumption(values["liters"], values["trip_km"])
+    return values
+
+
+def _apply_fuel_entry_calculations(db: Session, entry: models.FuelEntry) -> None:
+    if entry.total_price_vat is None and entry.liters and entry.price_per_liter:
+        entry.total_price_vat = _round_decimal(entry.liters * entry.price_per_liter)
+    if entry.price_per_liter is None and entry.liters and entry.total_price_vat:
+        entry.price_per_liter = _round_decimal(entry.total_price_vat / entry.liters)
+    if entry.trip_km is None and entry.odometer_km:
+        previous = _previous_fuel_entry(db, entry.vehicle_id, entry.purchased_on, entry.purchased_at, entry.id)
+        if previous and previous.odometer_km and entry.odometer_km > previous.odometer_km:
+            entry.trip_km = entry.odometer_km - previous.odometer_km
+    if entry.full_tank is not True:
+        entry.average_consumption = None
+
+
+def _previous_fuel_entry(db: Session, vehicle_id, purchased_on: date, purchased_at: time | None = None, exclude_id=None):
+    current_time = purchased_at or time(23, 59, 59)
+    stmt = (
+        select(models.FuelEntry)
+        .where(
+            models.FuelEntry.vehicle_id == vehicle_id,
+            or_(
+                models.FuelEntry.purchased_on < purchased_on,
+                and_(
+                    models.FuelEntry.purchased_on == purchased_on,
+                    func.coalesce(models.FuelEntry.purchased_at, time(0, 0, 0)) < current_time,
+                ),
+            ),
+        )
+        .order_by(models.FuelEntry.purchased_on.desc(), models.FuelEntry.purchased_at.desc().nullslast())
+        .limit(1)
+    )
+    if exclude_id:
+        stmt = stmt.where(models.FuelEntry.id != exclude_id)
+    return db.scalar(stmt)
+
+
+def recalculate_fuel_vehicle(db: Session, vehicle_id) -> None:
+    rows = db.scalars(
+        select(models.FuelEntry)
+        .where(models.FuelEntry.vehicle_id == vehicle_id)
+        .order_by(models.FuelEntry.purchased_on, models.FuelEntry.purchased_at.nullsfirst(), models.FuelEntry.created_at)
+    ).all()
+    previous_odometer = None
+    previous_full_odometer = None
+    liters_since_full = Decimal("0")
+    for entry in rows:
+        if entry.total_price_vat is None and entry.liters and entry.price_per_liter:
+            entry.total_price_vat = _round_decimal(entry.liters * entry.price_per_liter)
+        if entry.price_per_liter is None and entry.liters and entry.total_price_vat:
+            entry.price_per_liter = _round_decimal(entry.total_price_vat / entry.liters)
+        if previous_odometer is not None and entry.odometer_km and entry.odometer_km > previous_odometer:
+            entry.trip_km = entry.odometer_km - previous_odometer
+        elif entry.trip_km is not None and entry.trip_km < 0:
+            entry.trip_km = None
+        if entry.liters:
+            liters_since_full += entry.liters
+        if entry.full_tank is True:
+            km_since_full = None
+            if previous_full_odometer is not None and entry.odometer_km and entry.odometer_km > previous_full_odometer:
+                km_since_full = entry.odometer_km - previous_full_odometer
+            elif entry.trip_km:
+                km_since_full = entry.trip_km
+            entry.average_consumption = _average_consumption(liters_since_full, km_since_full) if km_since_full else None
+            previous_full_odometer = entry.odometer_km or previous_full_odometer
+            liters_since_full = Decimal("0")
+        else:
+            entry.average_consumption = None
+        if entry.odometer_km:
+            previous_odometer = entry.odometer_km
+    db.commit()
+
+
+def _round_decimal(value: Decimal, places: str = "0.01") -> Decimal:
+    return value.quantize(Decimal(places))
 
 
 def fuel_summary(db: Session, vehicle_id=None):

@@ -86,9 +86,13 @@ NEXT_PUBLIC_API_URL=https://activities.sevcikassets.cz/api
 APP_USERNAME=admin
 APP_PASSWORD=<prvni-admin-heslo>
 APP_TOKEN_SECRET=<nahodny-token-secret>
+# Volitelne pro rozpoznavani fotek PHM pres AWS Textract:
+AWS_REGION=eu-central-1
 ```
 
 `APP_USERNAME` a `APP_PASSWORD` se pouziji jen pri prvnim startu pro vytvoreni prvniho admina. Dalsi uzivatele a hesla se spravuji primo v aplikaci v sekci `Uzivatele`.
+
+Pro rozpoznavani uctenek a palubni desky v agende PHM pridejte EC2 instance role opravneni `textract:DetectDocumentText`. Bez tohoto opravneni bude rucni zadavani a editace PHM fungovat dal, pouze tlacitko pro rozpoznani fotek vrati chybu konfigurace OCR.
 
 Aktualizace aplikace po zmenach v Gitu:
 

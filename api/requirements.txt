@@ -6,3 +6,4 @@ pydantic-settings==2.7.0
 python-multipart==0.0.20
 openpyxl==3.1.5
 xlrd==2.0.1
+boto3==1.35.99

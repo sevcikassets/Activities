@@ -15,6 +15,7 @@ from app.auth import AuthUser, authenticate, bootstrap_admin_user, create_user, 
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.excel_import import import_workbook
+from app.fuel_ocr import FuelOcrUnavailable, parse_fuel_photos
 from app.repository import (
     category_comparison,
     category_period_summary,
@@ -48,6 +49,7 @@ from app.schemas import (
     FuelEntryOut,
     FuelEntryUpdate,
     FuelImportResponse,
+    FuelPhotoParseResponse,
     FuelSummaryRow,
     FuelVehicleOut,
     LoginRequest,
@@ -154,7 +156,7 @@ def serialize_fuel_entry(entry: models.FuelEntry) -> FuelEntryOut:
 def decimal_or_none(value: str | None) -> Decimal | None:
     if not value:
         return None
-    return Decimal(value.replace(",", "."))
+    return Decimal(value.replace(" ", "").replace(",", "."))
 
 
 def bool_or_none(value: str | None) -> bool | None:
@@ -392,6 +394,23 @@ def get_fuel_summary(
     _user: AuthUser = Depends(require_user),
 ) -> list[FuelSummaryRow]:
     return [FuelSummaryRow(**row) for row in fuel_summary(db, vehicle_id)]
+
+
+@app.post("/fuel/parse-photos", response_model=FuelPhotoParseResponse)
+async def parse_fuel_entry_photos(
+    receipt_photo: UploadFile | None = File(None),
+    dashboard_photo: UploadFile | None = File(None),
+    _user: AuthUser = Depends(require_editor),
+) -> FuelPhotoParseResponse:
+    receipt_bytes = await receipt_photo.read() if receipt_photo and receipt_photo.filename else None
+    dashboard_bytes = await dashboard_photo.read() if dashboard_photo and dashboard_photo.filename else None
+    if not receipt_bytes and not dashboard_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No photo uploaded.")
+    try:
+        result = parse_fuel_photos(receipt_bytes, dashboard_bytes)
+    except FuelOcrUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return FuelPhotoParseResponse(**result)
 
 
 @app.post("/fuel/entries", response_model=FuelEntryOut)
