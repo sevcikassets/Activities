@@ -136,7 +136,8 @@ type FuelConsumptionPoint = {
   key: string;
   label: string;
   value: number;
-  date: string;
+  liters: number;
+  tripKm: number;
 };
 
 type OverheadTicket = {
@@ -528,19 +529,27 @@ function buildFuelDisplayRows(entries: FuelEntry[]): FuelDisplayRow[] {
 }
 
 function buildFuelConsumptionPoints(entries: FuelEntry[]): FuelConsumptionPoint[] {
-  return entries
-    .filter((entry) => entry.average_consumption && entry.full_tank === true)
-    .sort((left, right) => {
-      const dateCompare = left.purchased_on.localeCompare(right.purchased_on);
-      if (dateCompare) return dateCompare;
-      return (left.purchased_at || "").localeCompare(right.purchased_at || "");
-    })
-    .slice(-36)
-    .map((entry) => ({
-      key: entry.id,
-      label: entry.purchased_on.slice(2, 10),
-      date: entry.purchased_on,
-      value: Number(entry.average_consumption || 0)
+  const months = new Map<string, { liters: number; tripKm: number }>();
+  for (const entry of entries) {
+    if (entry.full_tank !== true || !entry.trip_km || !entry.liters) {
+      continue;
+    }
+    const month = entry.purchased_on.slice(0, 7);
+    const item = months.get(month) ?? { liters: 0, tripKm: 0 };
+    item.liters += Number(entry.liters || 0);
+    item.tripKm += Number(entry.trip_km || 0);
+    months.set(month, item);
+  }
+  return [...months.entries()]
+    .filter(([, item]) => item.tripKm > 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(-24)
+    .map(([month, item]) => ({
+      key: month,
+      label: month.slice(2),
+      liters: item.liters,
+      tripKm: item.tripKm,
+      value: (item.liters / item.tripKm) * 100
     }));
 }
 
@@ -1770,7 +1779,7 @@ export default function Home() {
                 <div className="chartHeader">
                   <div>
                     <h3>Prubeh spotreby</h3>
-                    <p className="muted">Zobrazuji poslednich {fuelConsumptionPoints.length} vypoctenych spotreb z tankovani do plne nadrze.</p>
+                    <p className="muted">Mesicni spotreba z tankovani do plne nadrze za poslednich {fuelConsumptionPoints.length} mesicu.</p>
                   </div>
                   <strong>{fuelConsumptionAverage ? `${formatNumber(fuelConsumptionAverage)} l/100 km` : ""}</strong>
                 </div>
@@ -1779,7 +1788,7 @@ export default function Home() {
                     {fuelConsumptionPoints.map((point) => {
                       const height = Math.max(3, (point.value / fuelConsumptionMax) * 100);
                       return (
-                        <div className="barColumn" key={point.key} title={`${point.date}: ${point.value.toFixed(2)} l/100 km`}>
+                        <div className="barColumn" key={point.key} title={`${point.key}: ${point.value.toFixed(2)} l/100 km; ${point.tripKm.toFixed(0)} km; ${point.liters.toFixed(2)} l`}>
                           <span className="barValue">{point.value.toFixed(1)}</span>
                           <div className="barTrack">
                             <div className="barFill consumptionFill" style={{ height: `${height}%` }} />
