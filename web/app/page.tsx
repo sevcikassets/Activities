@@ -316,6 +316,10 @@ function quickTextFromDraft(value: EntryDraft) {
   return `${startedAt}-${endedAt}: ${description} Z: ${projectName}`;
 }
 
+function cleanDescriptionFromDraft(value: EntryDraft) {
+  return stripTextEntryStructure(value.raw_text || value.description || "", value.project_name || "");
+}
+
 function inferredCategory(projectName: string) {
   const normalized = projectName
     .normalize("NFD")
@@ -893,8 +897,9 @@ export default function Home() {
       if (syncText) {
         const quickText = quickTextFromDraft(next);
         setTextEntry(quickText);
-        if (quickText) {
-          next = { ...next, description: quickText };
+        const description = cleanDescriptionFromDraft(next);
+        if (description) {
+          next = { ...next, description, raw_text: description };
         }
       }
       return next;
@@ -927,7 +932,7 @@ export default function Home() {
       ended_at: timeValue(row.ended_at),
       duration_hours: row.duration_hours,
       category_code: row.category_code ?? "",
-      description: row.description,
+      description: stripTextEntryStructure(row.description, row.project_name ?? ""),
       ticket_external_id: row.ticket_external_id ?? "",
       project_name: row.project_name ?? "",
       transport_name: row.transport_name ?? "",
@@ -949,7 +954,7 @@ export default function Home() {
       ended_at: timeValue(row.ended_at),
       duration_hours: row.duration_hours,
       category_code: row.category_code ?? "",
-      description: row.description,
+      description: stripTextEntryStructure(row.description, row.project_name ?? ""),
       ticket_external_id: row.ticket_external_id ?? "",
       project_name: row.project_name ?? "",
       transport_name: row.transport_name ?? "",

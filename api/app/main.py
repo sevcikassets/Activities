@@ -23,6 +23,7 @@ from app.repository import (
     list_overhead_tickets,
     list_time_entries,
     monthly_summary,
+    normalize_time_entry_descriptions,
     parse_text_entry,
     period_summary,
     project_summary,
@@ -69,6 +70,7 @@ app.add_middleware(
 def startup() -> None:
     with SessionLocal() as db:
         bootstrap_admin_user(db)
+        normalize_time_entry_descriptions(db)
 
 
 def display_transport_name(name: str | None) -> str | None:

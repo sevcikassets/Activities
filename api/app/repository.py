@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timedelta
 import calendar
 from decimal import Decimal
+import re
 from unicodedata import normalize
 
 from sqlalchemy import and_, func, or_, select
@@ -28,6 +29,41 @@ def infer_category_code(project_name: str | None) -> str | None:
     if project_key in {"pohyb", "cviceni"}:
         return "P"
     return None
+
+
+def clean_activity_description(value: str, project_name: str | None = None) -> str:
+    cleaned = " ".join(value.strip().split())
+    cleaned = re.sub(r"^\d{1,2}[:.]\d{2}\s*-\s*\d{1,2}[:.-]\d{2}\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+    if project_name:
+        escaped_project = re.escape(project_name.strip())
+        cleaned = re.sub(rf"\s+Z:\s*{escaped_project}(?:\s*-\s*\d+(?:[,.]\d+)?)?\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+Z:\s*.+?(?:\s*-\s*\d+(?:[,.]\d+)?)?\s*$", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def normalize_time_entry_descriptions(db: Session) -> int:
+    entries = db.scalars(
+        select(models.TimeEntry)
+        .options(joinedload(models.TimeEntry.project))
+        .where(
+            or_(
+                models.TimeEntry.description.op("~*")(r"^\d{1,2}[:.]\d{2}\s*-\s*\d{1,2}[:.-]\d{2}\s*:"),
+                models.TimeEntry.description.op("~*")(r"\s+Z:\s*.+?(\s*-\s*\d+([,.]\d+)?)?\s*$"),
+            )
+        )
+    ).all()
+    updated_count = 0
+    for entry in entries:
+        original_description = entry.description
+        cleaned = clean_activity_description(entry.description, entry.project.name if entry.project else None)
+        if cleaned and cleaned != original_description:
+            entry.description = cleaned
+            if not entry.raw_text or entry.raw_text == original_description:
+                entry.raw_text = cleaned
+            updated_count += 1
+    if updated_count:
+        db.commit()
+    return updated_count
 
 
 def get_or_create_project(db: Session, name: str | None) -> models.Project | None:
@@ -381,8 +417,6 @@ def update_overhead_ticket_validity(
 
 
 def parse_text_entry(db: Session, raw_text: str, spent_on: date | None = None, category_code: str | None = None):
-    import re
-
     notes: list[str] = []
     text = " ".join(raw_text.strip().split())
     pattern = re.compile(
@@ -420,14 +454,13 @@ def parse_text_entry(db: Session, raw_text: str, spent_on: date | None = None, c
     if not ticket:
         notes.append("Pro zakazku a datum/cas nebyl nalezen platny rezijni tiket.")
     description = match.group("description").strip()
-    normalized_text = f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}: {description} Z: {project_name}"
     draft = {
         "spent_on": entry_date.isoformat(),
         "started_at": start.strftime("%H:%M"),
         "ended_at": end.strftime("%H:%M"),
         "duration_hours": str(duration),
         "category_code": resolved_category,
-        "description": normalized_text,
+        "description": description,
         "project_name": project_name,
         "ticket_external_id": ticket.external_id if ticket else None,
         "raw_text": description,
