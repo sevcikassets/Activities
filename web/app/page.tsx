@@ -341,14 +341,17 @@ function formatKm(value: string | null) {
   if (!value) {
     return "";
   }
-  return Math.round(Number(value)).toString();
+  return new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 0 }).format(Math.round(Number(value)));
 }
 
-function formatNumber(value: string | number | null | undefined, digits = 2) {
+function formatNumber(value: string | number | null | undefined, digits = 2, minimumDigits = digits) {
   if (value === null || value === undefined || value === "") {
     return "";
   }
-  return Number(value).toFixed(digits);
+  return new Intl.NumberFormat("cs-CZ", {
+    minimumFractionDigits: minimumDigits,
+    maximumFractionDigits: digits
+  }).format(Number(value));
 }
 
 function formatBool(value: boolean | null) {
@@ -922,27 +925,6 @@ export default function Home() {
     setDashboardPhoto(null);
     setFuelDraft({ ...emptyFuelDraft, vehicle_id: selectedFuelVehicleId, purchased_on: today() });
     await loadFuelEntries(selectedFuelVehicleId);
-  }
-
-  async function importFuelExcel(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const fileInput = event.currentTarget.elements.namedItem("fuelFile") as HTMLInputElement | null;
-    const file = fileInput?.files?.[0];
-    if (!file) {
-      setMessage("Vyberte soubor PHM k importu.");
-      return;
-    }
-    const form = new FormData();
-    form.set("file", file);
-    const response = await apiFetch("/fuel/imports/excel", { method: "POST", body: form });
-    if (!response.ok) {
-      setMessage("Import PHM se nepodaril.");
-      return;
-    }
-    const result = await response.json();
-    setMessage(`Import PHM dokoncen: ${result.imported_rows} radku, preskoceno ${result.skipped_rows}.`);
-    await loadFuelEntries(selectedFuelVehicleId);
-    fileInput.value = "";
   }
 
   async function parseTextEntry() {
@@ -1646,13 +1628,6 @@ export default function Home() {
               ))}
             </div>
 
-            {currentUser?.role === "admin" && (
-              <form className="fuelImportForm" onSubmit={importFuelExcel}>
-                <label>Import PHM z Excelu<input name="fuelFile" type="file" accept=".xls" /></label>
-                <button type="submit"><Download size={18} /> Importovat</button>
-              </form>
-            )}
-
             {selectedFuelVehicle && (
               <form className={`fuelForm ${selectedFuelVehicle.is_active ? "" : "disabledPanel"}`} onSubmit={saveFuelEntry}>
                 <div className="panelHeader compactHeader">
@@ -1698,12 +1673,12 @@ export default function Home() {
                   {fuelDisplayRows.map((row) => row.kind === "subtotal" ? (
                     <tr className={`subtotalRow fuelSubtotal ${row.level === "year" ? "yearSubtotal" : ""}`} key={row.key}>
                       <td colSpan={5}>{row.label}</td>
-                      <td>{row.liters}</td>
-                      <td>{row.total}</td>
+                      <td>{formatNumber(row.liters)}</td>
+                      <td>{formatNumber(row.total)}</td>
                       <td></td>
-                      <td>{row.tripKm}</td>
+                      <td>{formatKm(row.tripKm)}</td>
                       <td></td>
-                      <td>{row.average}</td>
+                      <td>{formatNumber(row.average)}</td>
                       <td colSpan={2}></td>
                     </tr>
                   ) : (
