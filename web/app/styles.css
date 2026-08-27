@@ -447,6 +447,49 @@ h2 {
   color: #1d4f7a;
 }
 
+.fuelStatsPanel {
+  background: #fbfcfd;
+}
+
+.fuelConsumptionChart {
+  grid-auto-columns: minmax(34px, 1fr);
+}
+
+.consumptionFill {
+  background: #15616d;
+}
+
+.fuelAverageCell {
+  background: #e8f4f6;
+  border: 1px solid #b9d5dc;
+  border-radius: 999px;
+  color: #0f4c5c;
+  display: inline-block;
+  font-weight: 800;
+  min-width: 64px;
+  padding: 3px 8px;
+  text-align: right;
+}
+
+.fuelAverageCell.low {
+  background: #e9f7ef;
+  border-color: #b8dec6;
+  color: #166534;
+}
+
+.fuelAverageCell.high {
+  background: #fff2e2;
+  border-color: #f0c48d;
+  color: #8a5200;
+}
+
+.fuelAverageCell.empty {
+  background: transparent;
+  border-color: transparent;
+  min-width: 0;
+  padding: 0;
+}
+
 .bulkInfo {
   align-items: center;
   color: #46546a;

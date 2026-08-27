@@ -132,6 +132,13 @@ type FuelDisplayRow =
   | { kind: "entry"; entry: FuelEntry }
   | { kind: "subtotal"; key: string; label: string; level: "month" | "year"; liters: string; total: string; tripKm: string; average: string };
 
+type FuelConsumptionPoint = {
+  key: string;
+  label: string;
+  value: number;
+  date: string;
+};
+
 type OverheadTicket = {
   external_id: string;
   project_name: string | null;
@@ -432,6 +439,20 @@ function fuelAverage(liters: number, tripKm: number) {
   return ((liters / tripKm) * 100).toFixed(2);
 }
 
+function fuelAverageClass(value: string | null | undefined) {
+  if (!value) {
+    return "fuelAverageCell empty";
+  }
+  const numberValue = Number(value);
+  if (numberValue >= 10) {
+    return "fuelAverageCell high";
+  }
+  if (numberValue <= 6) {
+    return "fuelAverageCell low";
+  }
+  return "fuelAverageCell";
+}
+
 function buildFuelDisplayRows(entries: FuelEntry[]): FuelDisplayRow[] {
   const rows: FuelDisplayRow[] = [];
   const sorted = [...entries].sort((left, right) => {
@@ -504,6 +525,23 @@ function buildFuelDisplayRows(entries: FuelEntry[]): FuelDisplayRow[] {
   pushMonth();
   pushYear();
   return rows;
+}
+
+function buildFuelConsumptionPoints(entries: FuelEntry[]): FuelConsumptionPoint[] {
+  return entries
+    .filter((entry) => entry.average_consumption && entry.full_tank === true)
+    .sort((left, right) => {
+      const dateCompare = left.purchased_on.localeCompare(right.purchased_on);
+      if (dateCompare) return dateCompare;
+      return (left.purchased_at || "").localeCompare(right.purchased_at || "");
+    })
+    .slice(-36)
+    .map((entry) => ({
+      key: entry.id,
+      label: entry.purchased_on.slice(2, 10),
+      date: entry.purchased_on,
+      value: Number(entry.average_consumption || 0)
+    }));
 }
 
 function quarterLabel(monthKey: string) {
@@ -627,6 +665,7 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activityFiltersOpen, setActivityFiltersOpen] = useState(false);
+  const [fuelStatsOpen, setFuelStatsOpen] = useState(false);
 
   const totalVisibleHours = useMemo(
     () => activities.reduce((sum, row) => sum + Number(row.duration_hours || 0), 0).toFixed(2),
@@ -671,6 +710,18 @@ export default function Home() {
     [fuelVehicles, selectedFuelVehicleId]
   );
   const fuelDisplayRows = useMemo(() => buildFuelDisplayRows(fuelEntries), [fuelEntries]);
+  const fuelConsumptionPoints = useMemo(() => buildFuelConsumptionPoints(fuelEntries), [fuelEntries]);
+  const fuelConsumptionMax = useMemo(
+    () => Math.max(1, ...fuelConsumptionPoints.map((point) => point.value)),
+    [fuelConsumptionPoints]
+  );
+  const fuelConsumptionAverage = useMemo(() => {
+    if (!fuelConsumptionPoints.length) {
+      return "";
+    }
+    const total = fuelConsumptionPoints.reduce((sum, point) => sum + point.value, 0);
+    return (total / fuelConsumptionPoints.length).toFixed(2);
+  }, [fuelConsumptionPoints]);
   const activeActivityFilterCount = useMemo(
     () => Object.values(filters).filter(Boolean).length,
     [filters]
@@ -1691,7 +1742,12 @@ export default function Home() {
                 <h2>Evidence PHM</h2>
                 <p className="muted">Vozidla, tankovani, fotky uctenek a mesicni/rocni mezisoucty.</p>
               </div>
-              <Fuel size={18} />
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => setFuelStatsOpen((current) => !current)}>
+                  <BarChart3 size={18} /> {fuelStatsOpen ? "Skryt statistiku" : "Statistika spotreby"}
+                </button>
+                <Fuel size={18} />
+              </div>
             </div>
 
             <div className="vehicleTabs">
@@ -1708,6 +1764,36 @@ export default function Home() {
                 </button>
               ))}
             </div>
+
+            {fuelStatsOpen && (
+              <div className="chartPanel fuelStatsPanel">
+                <div className="chartHeader">
+                  <div>
+                    <h3>Prubeh spotreby</h3>
+                    <p className="muted">Zobrazuji poslednich {fuelConsumptionPoints.length} vypoctenych spotreb z tankovani do plne nadrze.</p>
+                  </div>
+                  <strong>{fuelConsumptionAverage ? `${formatNumber(fuelConsumptionAverage)} l/100 km` : ""}</strong>
+                </div>
+                {fuelConsumptionPoints.length ? (
+                  <div className="barChart fuelConsumptionChart" role="img" aria-label="Prubeh prumerne spotreby PHM">
+                    {fuelConsumptionPoints.map((point) => {
+                      const height = Math.max(3, (point.value / fuelConsumptionMax) * 100);
+                      return (
+                        <div className="barColumn" key={point.key} title={`${point.date}: ${point.value.toFixed(2)} l/100 km`}>
+                          <span className="barValue">{point.value.toFixed(1)}</span>
+                          <div className="barTrack">
+                            <div className="barFill consumptionFill" style={{ height: `${height}%` }} />
+                          </div>
+                          <span className="barLabel">{point.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="muted">Pro graf zatim nejsou k dispozici vypoctene spotreby.</p>
+                )}
+              </div>
+            )}
 
             {selectedFuelVehicle && (
               <form className={`fuelForm ${selectedFuelVehicle.is_active ? "" : "disabledPanel"}`} onSubmit={saveFuelEntry}>
@@ -1766,7 +1852,7 @@ export default function Home() {
                       <td></td>
                       <td>{formatKm(row.tripKm)}</td>
                       <td></td>
-                      <td>{formatNumber(row.average)}</td>
+                      <td><span className={fuelAverageClass(row.average)}>{formatNumber(row.average)}</span></td>
                       <td colSpan={2}></td>
                     </tr>
                   ) : (
@@ -1781,7 +1867,7 @@ export default function Home() {
                       <td>{formatNumber(row.entry.price_per_liter)}</td>
                       <td>{formatKm(row.entry.trip_km)}</td>
                       <td>{formatBool(row.entry.full_tank)}</td>
-                      <td>{formatNumber(row.entry.average_consumption)}</td>
+                      <td><span className={fuelAverageClass(row.entry.average_consumption)}>{formatNumber(row.entry.average_consumption)}</span></td>
                       <td>{row.entry.source}</td>
                       <td className="rowActions">
                         <button className="iconButton secondary" disabled={!selectedFuelVehicle?.is_active} onClick={() => editFuelRow(row.entry)} title="Upravit PHM"><Edit3 size={16} /></button>
