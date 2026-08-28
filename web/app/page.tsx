@@ -1038,13 +1038,21 @@ export default function Home() {
     setIsParsingFuelPhotos(true);
     try {
       const response = await apiFetch("/fuel/parse-photos", { method: "POST", body: form });
-      const result = await response.json();
-      if (!response.ok) {
-        setMessage(result.detail || "Fotky se nepodarilo rozpoznat.");
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch {
+        setMessage(`Fotky se nepodarilo rozpoznat (server vratil neocekavanou odpoved, HTTP ${response.status}).`);
         return;
       }
-      updateFuelDraft(result.draft);
-      setMessage(result.confidence_notes?.join(" ") || "Fotky byly rozpoznany.");
+      if (!response.ok) {
+        setMessage(result?.detail || "Fotky se nepodarilo rozpoznat.");
+        return;
+      }
+      updateFuelDraft(result?.draft || {});
+      setMessage(result?.confidence_notes?.join(" ") || "Fotky byly rozpoznany.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Fotky se nepodarilo rozpoznat (chyba site).");
     } finally {
       setIsParsingFuelPhotos(false);
     }
