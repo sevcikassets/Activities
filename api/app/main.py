@@ -2,10 +2,12 @@ from pathlib import Path
 from decimal import Decimal
 from io import BytesIO
 from tempfile import NamedTemporaryFile
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from sqlalchemy.orm import Session
@@ -72,8 +74,15 @@ from app.schemas import (
 from app.voice import parse_voice_text
 
 
-app = FastAPI(title="Activities API")
+app = FastAPI(
+    title="Activities API",
+    docs_url="/docs" if settings.api_enable_docs else None,
+    redoc_url="/redoc" if settings.api_enable_docs else None,
+    openapi_url="/openapi.json" if settings.api_enable_docs else None,
+)
 
+if settings.allowed_hosts != ["*"]:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -81,6 +90,53 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    return response
+
+
+_failed_logins: dict[str, list[datetime]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _login_locked_out(ip: str) -> bool:
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=settings.login_lockout_seconds)
+    attempts = [stamp for stamp in _failed_logins.get(ip, []) if stamp > cutoff]
+    _failed_logins[ip] = attempts
+    return len(attempts) >= settings.login_max_attempts
+
+
+def _record_failed_login(ip: str) -> None:
+    _failed_logins.setdefault(ip, []).append(datetime.now(timezone.utc))
+
+
+def _clear_failed_logins(ip: str) -> None:
+    _failed_logins.pop(ip, None)
+
+
+def _rate_limit_response() -> None:
+    raise HTTPException(
+        status_code=429,
+        detail="Too many failed login attempts. Try again later.",
+        headers={"Retry-After": str(settings.login_lockout_seconds)},
+    )
 
 
 @app.on_event("startup")
@@ -182,10 +238,15 @@ def health() -> dict:
 
 
 @app.post("/auth/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> LoginResponse:
+    ip = _client_ip(request)
+    if _login_locked_out(ip):
+        _rate_limit_response()
     token = authenticate(db, payload.username, payload.password)
     if not token:
+        _record_failed_login(ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials.")
+    _clear_failed_logins(ip)
     return LoginResponse(access_token=token)
 
 
