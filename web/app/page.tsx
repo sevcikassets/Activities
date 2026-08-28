@@ -1924,19 +1924,19 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>Datum</th><th>Cas</th><th>Cerpaci stanice</th><th>Palivo</th><th>Stav km</th><th>Litru</th><th>Cena</th><th>Cena/l</th><th>Ujeto</th><th>Plna</th><th>Spotreba</th><th>Zdroj</th><th></th>
+                    <th>Datum</th><th>Cas</th><th>Cerpaci stanice</th><th>Palivo</th><th className="num">Stav km</th><th className="num">Litru</th><th className="num">Cena</th><th className="num">Cena/l</th><th className="num">Ujeto</th><th>Plna</th><th className="num">Spotreba</th><th>Zdroj</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {fuelDisplayRows.map((row) => row.kind === "subtotal" ? (
                     <tr className={`subtotalRow fuelSubtotal ${row.level === "year" ? "yearSubtotal" : ""}`} key={row.key}>
                       <td colSpan={5}>{row.label}</td>
-                      <td>{formatNumber(row.liters)}</td>
-                      <td>{formatNumber(row.total)}</td>
+                      <td className="num">{formatNumber(row.liters)}</td>
+                      <td className="num">{formatNumber(row.total)}</td>
                       <td></td>
-                      <td>{formatKm(row.tripKm)}</td>
+                      <td className="num">{formatKm(row.tripKm)}</td>
                       <td></td>
-                      <td><span className={fuelAverageClass(row.average)}>{formatNumber(row.average)}</span></td>
+                      <td className="num"><span className={fuelAverageClass(row.average)}>{formatNumber(row.average)}</span></td>
                       <td colSpan={2}></td>
                     </tr>
                   ) : (
@@ -1945,13 +1945,13 @@ export default function Home() {
                       <td>{timeValue(row.entry.purchased_at)}</td>
                       <td>{row.entry.station}</td>
                       <td>{row.entry.fuel_type}</td>
-                      <td>{formatKm(row.entry.odometer_km)}</td>
-                      <td>{formatNumber(row.entry.liters)}</td>
-                      <td>{formatNumber(row.entry.total_price_vat)}</td>
-                      <td>{formatNumber(row.entry.price_per_liter)}</td>
-                      <td>{formatKm(row.entry.trip_km)}</td>
+                      <td className="num">{formatKm(row.entry.odometer_km)}</td>
+                      <td className="num">{formatNumber(row.entry.liters)}</td>
+                      <td className="num">{formatNumber(row.entry.total_price_vat)}</td>
+                      <td className="num">{formatNumber(row.entry.price_per_liter)}</td>
+                      <td className="num">{formatKm(row.entry.trip_km)}</td>
                       <td>{formatBool(row.entry.full_tank)}</td>
-                      <td><span className={fuelAverageClass(row.entry.average_consumption)}>{formatNumber(row.entry.average_consumption)}</span></td>
+                      <td className="num"><span className={fuelAverageClass(row.entry.average_consumption)}>{formatNumber(row.entry.average_consumption)}</span></td>
                       <td>{row.entry.source}</td>
                       <td className="rowActions">
                         <button className="iconButton secondary" disabled={!selectedFuelVehicle?.is_active} onClick={() => editFuelRow(row.entry)} title="Upravit PHM"><Edit3 size={16} /></button>

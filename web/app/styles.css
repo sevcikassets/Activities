@@ -810,6 +810,10 @@ th, td {
   vertical-align: top;
 }
 
+th.num, td.num {
+  text-align: right;
+}
+
 th {
   color: #536176;
   font-size: 12px;
