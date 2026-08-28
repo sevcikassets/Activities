@@ -4,6 +4,9 @@ services:
 
   api:
     restart: unless-stopped
+    environment:
+      API_ALLOWED_HOSTS: ${DOMAIN:?set DOMAIN in .env}
+      API_ENABLE_DOCS: "false"
     networks:
       - default
       - proxy
@@ -14,7 +17,18 @@ services:
       - "traefik.http.routers.activities-api.entrypoints=websecure"
       - "traefik.http.routers.activities-api.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.activities-api-strip.stripprefix.prefixes=/api"
-      - "traefik.http.routers.activities-api.middlewares=activities-api-strip"
+      - "traefik.http.routers.activities-api.middlewares=activities-api-strip,activities-api-ratelimit,activities-secure-headers"
+      - "traefik.http.middlewares.activities-api-ratelimit.ratelimit.average=20"
+      - "traefik.http.middlewares.activities-api-ratelimit.ratelimit.burst=40"
+      - "traefik.http.middlewares.activities-secure-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.activities-secure-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.activities-secure-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.activities-secure-headers.headers.customFrameOptionsValue=DENY"
+      - "traefik.http.middlewares.activities-secure-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      - "traefik.http.middlewares.activities-secure-headers.headers.permissionsPolicy=camera=(), microphone=(), geolocation=()"
+      - "traefik.http.middlewares.activities-secure-headers.headers.contentSecurityPolicy=default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+      - "traefik.http.middlewares.activities-secure-headers.headers.customResponseHeaders.X-Powered-By="
+      - "traefik.http.middlewares.activities-secure-headers.headers.customResponseHeaders.Server="
       - "traefik.http.services.activities-api.loadbalancer.server.port=8000"
 
   web:
@@ -28,6 +42,7 @@ services:
       - "traefik.http.routers.activities.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.activities.entrypoints=websecure"
       - "traefik.http.routers.activities.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.activities.middlewares=activities-secure-headers"
       - "traefik.http.services.activities.loadbalancer.server.port=3000"
 
 networks:
