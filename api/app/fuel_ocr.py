@@ -120,8 +120,12 @@ def _parse_station(text: str) -> str | None:
 
 def _parse_liters(text: str) -> Decimal | None:
     patterns = [
-        r"(\d+(?:\.\d+)?)\s*l(?:itru|itry|itr|\.|\b)",
+        # Decimal quantities first: fuel pumps always print fractional liters
+        # (e.g. "58.220 l"), which keeps this from matching an octane number
+        # like "Natural 95 l" printed earlier on the receipt.
+        r"(\d+\.\d+)\s*l(?:itru|itry|itr|\.|\b)",
         r"mnozstvi\s*(\d+(?:\.\d+)?)",
+        r"(\d+)\s*l(?:itru|itry|itr|\.|\b)",
     ]
     return _first_decimal(text, patterns)
 
@@ -146,11 +150,16 @@ def _parse_total_price(text: str) -> Decimal | None:
     return max(values) if values else None
 
 
+_KM_NUMBER = r"(?:\d{1,3}(?:\s\d{3})+|\d{4,7})"
+
+
 def _parse_dashboard_km(text: str) -> Decimal | None:
+    # Odometer readings are often printed with a thousands separator space,
+    # e.g. dashboard trip computers showing "ODO: 96 214 km".
     patterns = [
-        r"(\d{4,7})\s*km\b",
-        r"\bodo(?:meter)?\D{0,10}(\d{4,7})\b",
-        r"\bstav\D{0,10}(\d{4,7})\b",
+        rf"({_KM_NUMBER})\s*km\b",
+        rf"\bodo(?:meter)?\D{{0,10}}({_KM_NUMBER})\b",
+        rf"\bstav\D{{0,10}}({_KM_NUMBER})\b",
     ]
     return _first_decimal(text, patterns)
 

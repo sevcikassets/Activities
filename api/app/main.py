@@ -221,14 +221,32 @@ def bool_or_none(value: str | None) -> bool | None:
     return value.lower() in {"true", "1", "ano", "yes"}
 
 
+MAX_PHOTO_BYTES = 15 * 1024 * 1024
+MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
+ALLOWED_WORKBOOK_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
+
+
+async def read_upload(file: UploadFile, max_bytes: int, *, require_image: bool = False) -> bytes:
+    if require_image and file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Ocekavan je obrazovy soubor (foto).")
+    data = await file.read()
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Soubor je prilis velky (max {max_bytes // (1024 * 1024)} MB).",
+        )
+    return data
+
+
 async def save_upload(file: UploadFile | None, prefix: str) -> str | None:
     if not file or not file.filename:
         return None
+    data = await read_upload(file, MAX_PHOTO_BYTES, require_image=True)
     upload_dir = Path("/app/uploads/fuel")
     upload_dir.mkdir(parents=True, exist_ok=True)
     safe_name = "".join(char if char.isalnum() or char in ".-_" else "_" for char in file.filename)
     target = upload_dir / f"{prefix}-{safe_name}"
-    target.write_bytes(await file.read())
+    target.write_bytes(data)
     return str(target)
 
 
@@ -463,8 +481,8 @@ async def parse_fuel_entry_photos(
     dashboard_photo: UploadFile | None = File(None),
     _user: AuthUser = Depends(require_editor),
 ) -> FuelPhotoParseResponse:
-    receipt_bytes = await receipt_photo.read() if receipt_photo and receipt_photo.filename else None
-    dashboard_bytes = await dashboard_photo.read() if dashboard_photo and dashboard_photo.filename else None
+    receipt_bytes = await read_upload(receipt_photo, MAX_PHOTO_BYTES, require_image=True) if receipt_photo and receipt_photo.filename else None
+    dashboard_bytes = await read_upload(dashboard_photo, MAX_PHOTO_BYTES, require_image=True) if dashboard_photo and dashboard_photo.filename else None
     if not receipt_bytes and not dashboard_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No photo uploaded.")
     try:
@@ -545,8 +563,11 @@ async def import_fuel_excel(
     _user: AuthUser = Depends(require_admin),
 ) -> FuelImportResponse:
     suffix = Path(file.filename or "phm.xls").suffix or ".xls"
+    if suffix.lower() not in ALLOWED_WORKBOOK_SUFFIXES:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Ocekavan je soubor .xls, .xlsx nebo .xlsm.")
+    data = await read_upload(file, MAX_WORKBOOK_BYTES)
     with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(data)
         tmp_path = Path(tmp.name)
     try:
         result = import_fuel_workbook(db, tmp_path)
@@ -675,8 +696,11 @@ async def import_excel(
     _user: AuthUser = Depends(require_admin),
 ) -> dict:
     suffix = Path(file.filename or "activities.xlsm").suffix or ".xlsm"
+    if suffix.lower() not in ALLOWED_WORKBOOK_SUFFIXES:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Ocekavan je soubor .xls, .xlsx nebo .xlsm.")
+    data = await read_upload(file, MAX_WORKBOOK_BYTES)
     with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(data)
         tmp_path = Path(tmp.name)
     try:
         result = import_workbook(db, tmp_path)
