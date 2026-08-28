@@ -604,8 +604,32 @@ button {
   padding: 8px;
 }
 
-.voicePanel button {
+.voicePanel .actions {
   margin-top: 12px;
+}
+
+.recording {
+  animation: recordingPulse 1.2s ease-in-out infinite;
+  background: #c0392b !important;
+}
+
+@keyframes recordingPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.65;
+  }
+}
+
+.photoPreview {
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  display: block;
+  margin-top: 6px;
+  max-height: 160px;
+  max-width: 100%;
+  object-fit: cover;
 }
 
 .message {

@@ -1,7 +1,7 @@
 "use client";
 
 import { BarChart3, CheckSquare, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
-import { Fragment, FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { Fragment, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -591,6 +591,41 @@ function buildFuelConsumptionPoints(entries: FuelEntry[]): FuelConsumptionPoint[
     }));
 }
 
+type FuelPricePoint = {
+  key: string;
+  label: string;
+  value: number;
+  entries: number;
+};
+
+const FUEL_PRICE_SERIES = [
+  { key: "natural95", label: "Natural 95", color: "#15616d", match: (type: string) => type.toLowerCase().includes("natural") },
+  { key: "nafta", label: "Nafta (Diesel)", color: "#c17c1f", match: (type: string) => /nafta|diesel/.test(type.toLowerCase()) }
+] as const;
+
+function buildFuelPricePoints(entries: FuelEntry[], match: (type: string) => boolean): FuelPricePoint[] {
+  const months = new Map<string, { total: number; entries: number }>();
+  for (const entry of entries) {
+    if (!entry.fuel_type || !entry.price_per_liter || !match(entry.fuel_type)) {
+      continue;
+    }
+    const month = entry.purchased_on.slice(0, 7);
+    const item = months.get(month) ?? { total: 0, entries: 0 };
+    item.total += Number(entry.price_per_liter);
+    item.entries += 1;
+    months.set(month, item);
+  }
+  return [...months.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(-24)
+    .map(([month, item]) => ({
+      key: month,
+      label: month.slice(2),
+      entries: item.entries,
+      value: item.total / item.entries
+    }));
+}
+
 function quarterLabel(monthKey: string) {
   const [year, monthText] = monthKey.split("-");
   const quarter = Math.ceil(Number(monthText) / 3);
@@ -685,6 +720,8 @@ export default function Home() {
   const [editingFuelEntryId, setEditingFuelEntryId] = useState<string | null>(null);
   const [receiptPhoto, setReceiptPhoto] = useState<File | null>(null);
   const [dashboardPhoto, setDashboardPhoto] = useState<File | null>(null);
+  const [receiptPhotoPreview, setReceiptPhotoPreview] = useState<string | null>(null);
+  const [dashboardPhotoPreview, setDashboardPhotoPreview] = useState<string | null>(null);
   const [isParsingFuelPhotos, setIsParsingFuelPhotos] = useState(false);
   const [overheadTickets, setOverheadTickets] = useState<OverheadTicket[]>([]);
   const [filters, setFilters] = useState<Filters>(defaultFilters);
@@ -698,6 +735,8 @@ export default function Home() {
   const [textEntry, setTextEntry] = useState("");
   const [textEntryRecognized, setTextEntryRecognized] = useState(false);
   const [voiceText, setVoiceText] = useState("");
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const voiceRecognitionRef = useRef<any>(null);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [selectedActivityIds, setSelectedActivityIds] = useState<string[]>([]);
   const [bulkCopyDate, setBulkCopyDate] = useState(today());
@@ -770,6 +809,17 @@ export default function Home() {
     const total = fuelConsumptionPoints.reduce((sum, point) => sum + point.value, 0);
     return (total / fuelConsumptionPoints.length).toFixed(2);
   }, [fuelConsumptionPoints]);
+  const fuelPriceSeriesData = useMemo(
+    () =>
+      FUEL_PRICE_SERIES.map((series) => ({ ...series, points: buildFuelPricePoints(fuelEntries, series.match) })).filter(
+        (series) => series.points.length > 0
+      ),
+    [fuelEntries]
+  );
+  const fuelPriceMax = useMemo(
+    () => Math.max(1, ...fuelPriceSeriesData.flatMap((series) => series.points.map((point) => point.value))),
+    [fuelPriceSeriesData]
+  );
   const activeActivityFilterCount = useMemo(
     () => Object.values(filters).filter(Boolean).length,
     [filters]
@@ -903,6 +953,9 @@ export default function Home() {
     if (storedToken) {
       setToken(storedToken);
     }
+    return () => {
+      voiceRecognitionRef.current?.stop();
+    };
   }, []);
 
   useEffect(() => {
@@ -911,6 +964,26 @@ export default function Home() {
     }
     refreshAll().catch((error) => setMessage(error.message || "API zatim neodpovida."));
   }, [token]);
+
+  useEffect(() => {
+    if (!receiptPhoto) {
+      setReceiptPhotoPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(receiptPhoto);
+    setReceiptPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [receiptPhoto]);
+
+  useEffect(() => {
+    if (!dashboardPhoto) {
+      setDashboardPhotoPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(dashboardPhoto);
+    setDashboardPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [dashboardPhoto]);
 
   useEffect(() => {
     if (editingEntryId) {
@@ -1101,6 +1174,47 @@ export default function Home() {
       event.preventDefault();
       void parseTextEntry();
     }
+  }
+
+  function startVoiceListening() {
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) {
+      setMessage("Hlasovy vstup neni v tomto prohlizeci podporovan. Zkuste Chrome nebo Edge.");
+      return;
+    }
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = "cs-CZ";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    const baseText = voiceText.trim();
+    let finalText = baseText ? `${baseText} ` : "";
+    recognition.onresult = (event: any) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalText += `${result[0].transcript} `;
+        } else {
+          interim += result[0].transcript;
+        }
+      }
+      setVoiceText((finalText + interim).trim());
+    };
+    recognition.onerror = (event: any) => {
+      setMessage(event.error === "not-allowed" ? "Pristup k mikrofonu byl zamitnut." : "Hlasovy vstup selhal, zkuste to znovu.");
+      setIsVoiceListening(false);
+    };
+    recognition.onend = () => {
+      setIsVoiceListening(false);
+    };
+    voiceRecognitionRef.current = recognition;
+    recognition.start();
+    setIsVoiceListening(true);
+  }
+
+  function stopVoiceListening() {
+    voiceRecognitionRef.current?.stop();
+    setIsVoiceListening(false);
   }
 
   async function parseVoice() {
@@ -1658,7 +1772,16 @@ export default function Home() {
                   <Mic size={18} />
                 </div>
                 <textarea value={voiceText} onChange={(e) => setVoiceText(e.target.value)} placeholder="Dnes od 7 do 7:30 e-maily pro ZAKO ticket 39365" />
-                <button onClick={parseVoice}><Mic size={18} /> Prevest do navrhu</button>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className={isVoiceListening ? "secondary recording" : "secondary"}
+                    onClick={isVoiceListening ? stopVoiceListening : startVoiceListening}
+                  >
+                    <Mic size={18} /> {isVoiceListening ? "Zastavit nahravani" : "Mluvit"}
+                  </button>
+                  <button onClick={parseVoice}><Search size={18} /> Prevest do navrhu</button>
+                </div>
               </section>
             </section>
 
@@ -1887,6 +2010,44 @@ export default function Home() {
               </div>
             )}
 
+            {fuelStatsOpen && fuelPriceSeriesData.length > 0 && (
+              <div className="chartPanel fuelStatsPanel">
+                <div className="chartHeader">
+                  <div>
+                    <h3>Cena PHM podle druhu paliva</h3>
+                    <p className="muted">Mesicni prumerna cena za litr.</p>
+                  </div>
+                </div>
+                <div className="smallCharts">
+                  {fuelPriceSeriesData.map((series) => {
+                    const average = series.points.reduce((sum, point) => sum + point.value, 0) / series.points.length;
+                    return (
+                      <div className="smallChart" key={series.key}>
+                        <div className="smallChartTitle">
+                          <span><i style={{ background: series.color }} /> {series.label}</span>
+                          <strong>{average.toFixed(2)} Kc/l</strong>
+                        </div>
+                        <div className="barChart" role="img" aria-label={`Mesicni prumerna cena ${series.label}`}>
+                          {series.points.map((point) => {
+                            const height = Math.max(3, (point.value / fuelPriceMax) * 100);
+                            return (
+                              <div className="barColumn" key={point.key} title={`${point.key}: ${point.value.toFixed(2)} Kc/l, ${point.entries} cerpani`}>
+                                <span className="barValue">{point.value.toFixed(1)}</span>
+                                <div className="barTrack">
+                                  <div className="barFill" style={{ height: `${height}%`, background: series.color }} />
+                                </div>
+                                <span className="barLabel">{point.label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {selectedFuelVehicle && (
               <form className={`fuelForm ${selectedFuelVehicle.is_active ? "" : "disabledPanel"}`} onSubmit={saveFuelEntry}>
                 <div className="panelHeader compactHeader">
@@ -1910,8 +2071,20 @@ export default function Home() {
                     <label>Ujeto km<input type="number" step="1" value={fuelDraft.trip_km} onChange={(e) => updateFuelDraft({ trip_km: e.target.value })} /></label>
                     <label>Plna nadrz<select value={fuelDraft.full_tank} onChange={(e) => updateFuelDraft({ full_tank: e.target.value })}><option value="">-</option><option value="true">Ano</option><option value="false">Ne</option></select></label>
                     <label>Spotreba<input type="number" step="0.01" value={fuelDraft.average_consumption} onChange={(e) => updateFuelDraft({ average_consumption: e.target.value })} /></label>
-                    {!editingFuelEntryId && <label>Fotka uctenky<input type="file" accept="image/*" onChange={(e) => setReceiptPhoto(e.target.files?.[0] ?? null)} /></label>}
-                    {!editingFuelEntryId && <label>Fotka palubky<input type="file" accept="image/*" onChange={(e) => setDashboardPhoto(e.target.files?.[0] ?? null)} /></label>}
+                    {!editingFuelEntryId && (
+                      <label>
+                        Fotka uctenky
+                        <input type="file" accept="image/*" capture="environment" onChange={(e) => setReceiptPhoto(e.target.files?.[0] ?? null)} />
+                        {receiptPhotoPreview && <img className="photoPreview" src={receiptPhotoPreview} alt="Nahled uctenky" />}
+                      </label>
+                    )}
+                    {!editingFuelEntryId && (
+                      <label>
+                        Fotka palubky
+                        <input type="file" accept="image/*" capture="environment" onChange={(e) => setDashboardPhoto(e.target.files?.[0] ?? null)} />
+                        {dashboardPhotoPreview && <img className="photoPreview" src={dashboardPhotoPreview} alt="Nahled palubky" />}
+                      </label>
+                    )}
                   </div>
                   {!editingFuelEntryId && (
                     <div className="actions">
