@@ -319,6 +319,15 @@ def _round_decimal(value: Decimal, places: str = "0.01") -> Decimal:
 
 def fuel_summary(db: Session, vehicle_id=None):
     rows = list_fuel_entries(db, vehicle_id, limit=10000)
+
+    earliest_per_vehicle: dict = {}
+    for entry in rows:
+        entry_key = (entry.purchased_on, entry.purchased_at or time(0, 0, 0))
+        current = earliest_per_vehicle.get(entry.vehicle_id)
+        if current is None or entry_key < current[0]:
+            earliest_per_vehicle[entry.vehicle_id] = (entry_key, entry.id)
+    first_entry_ids = {value[1] for value in earliest_per_vehicle.values()}
+
     monthly: dict[str, dict] = {}
     yearly: dict[str, dict] = {}
 
@@ -339,6 +348,8 @@ def fuel_summary(db: Session, vehicle_id=None):
         item["trip_km"] += entry.trip_km or Decimal("0")
 
     for entry in rows:
+        if entry.id in first_entry_ids:
+            continue
         month_key = entry.purchased_on.strftime("%Y-%m")
         year_key = str(entry.purchased_on.year)
         add_item(monthly, month_key, month_key, "month", entry)

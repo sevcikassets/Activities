@@ -138,6 +138,7 @@ type FuelConsumptionPoint = {
   value: number;
   liters: number;
   tripKm: number;
+  entries: number;
 };
 
 type OverheadTicket = {
@@ -520,6 +521,8 @@ function buildFuelDisplayRows(entries: FuelEntry[]): FuelDisplayRow[] {
     });
   }
 
+  const firstEntryId = sorted.length ? sorted[sorted.length - 1].id : null;
+
   for (const entry of sorted) {
     const month = entry.purchased_on.slice(0, 7);
     const year = entry.purchased_on.slice(0, 4);
@@ -537,12 +540,14 @@ function buildFuelDisplayRows(entries: FuelEntry[]): FuelDisplayRow[] {
     }
     currentMonth = month;
     currentYear = year;
-    monthLiters += Number(entry.liters || 0);
-    monthTotal += Number(entry.total_price_vat || 0);
-    monthTrip += Number(entry.trip_km || 0);
-    yearLiters += Number(entry.liters || 0);
-    yearTotal += Number(entry.total_price_vat || 0);
-    yearTrip += Number(entry.trip_km || 0);
+    if (entry.id !== firstEntryId) {
+      monthLiters += Number(entry.liters || 0);
+      monthTotal += Number(entry.total_price_vat || 0);
+      monthTrip += Number(entry.trip_km || 0);
+      yearLiters += Number(entry.liters || 0);
+      yearTotal += Number(entry.total_price_vat || 0);
+      yearTrip += Number(entry.trip_km || 0);
+    }
     rows.push({ kind: "entry", entry });
   }
   pushMonth();
@@ -551,15 +556,25 @@ function buildFuelDisplayRows(entries: FuelEntry[]): FuelDisplayRow[] {
 }
 
 function buildFuelConsumptionPoints(entries: FuelEntry[]): FuelConsumptionPoint[] {
-  const months = new Map<string, { liters: number; tripKm: number }>();
+  const months = new Map<string, { liters: number; tripKm: number; entries: number }>();
+  const oldestFirst = [...entries].sort((left, right) => {
+    const dateCompare = left.purchased_on.localeCompare(right.purchased_on);
+    if (dateCompare) return dateCompare;
+    return (left.purchased_at || "").localeCompare(right.purchased_at || "");
+  });
+  const firstEntryId = oldestFirst.length ? oldestFirst[0].id : null;
   for (const entry of entries) {
-    if (entry.full_tank !== true || !entry.trip_km || !entry.liters) {
+    if (entry.id === firstEntryId) {
+      continue;
+    }
+    if (!entry.trip_km || !entry.liters) {
       continue;
     }
     const month = entry.purchased_on.slice(0, 7);
-    const item = months.get(month) ?? { liters: 0, tripKm: 0 };
+    const item = months.get(month) ?? { liters: 0, tripKm: 0, entries: 0 };
     item.liters += Number(entry.liters || 0);
     item.tripKm += Number(entry.trip_km || 0);
+    item.entries += 1;
     months.set(month, item);
   }
   return [...months.entries()]
@@ -571,6 +586,7 @@ function buildFuelConsumptionPoints(entries: FuelEntry[]): FuelConsumptionPoint[
       label: month.slice(2),
       liters: item.liters,
       tripKm: item.tripKm,
+      entries: item.entries,
       value: (item.liters / item.tripKm) * 100
     }));
 }
@@ -1838,7 +1854,7 @@ export default function Home() {
                 <div className="chartHeader">
                   <div>
                     <h3>Prubeh spotreby</h3>
-                    <p className="muted">Mesicni spotreba z tankovani do plne nadrze za poslednich {fuelConsumptionPoints.length} mesicu.</p>
+                    <p className="muted">Mesicni souhrn spotreby za poslednich {fuelConsumptionPoints.length} mesicu.</p>
                   </div>
                   <strong>{fuelConsumptionAverage ? `${formatNumber(fuelConsumptionAverage)} l/100 km` : ""}</strong>
                 </div>
@@ -1847,7 +1863,7 @@ export default function Home() {
                     {fuelConsumptionPoints.map((point) => {
                       const height = Math.max(3, (point.value / fuelConsumptionMax) * 100);
                       return (
-                        <div className="barColumn" key={point.key} title={`${point.key}: ${point.value.toFixed(2)} l/100 km; ${point.tripKm.toFixed(0)} km; ${point.liters.toFixed(2)} l`}>
+                        <div className="barColumn" key={point.key} title={`${point.key}: ${point.value.toFixed(2)} l/100 km; ${point.tripKm.toFixed(0)} km; ${point.liters.toFixed(2)} l; ${point.entries} cerpani`}>
                           <span className="barValue">{point.value.toFixed(1)}</span>
                           <div className="barTrack">
                             <div className="barFill consumptionFill" style={{ height: `${height}%` }} />
