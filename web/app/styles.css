@@ -532,6 +532,15 @@ h2 {
   font-size: 13px;
 }
 
+.colorDot {
+  border-radius: 999px;
+  display: inline-block;
+  height: 9px;
+  margin-right: 6px;
+  vertical-align: middle;
+  width: 9px;
+}
+
 label {
   color: #46546a;
   display: grid;
@@ -550,6 +559,13 @@ input, textarea, select {
 th input[type="checkbox"], td input[type="checkbox"] {
   min-height: 0;
   width: auto;
+}
+
+input[type="color"] {
+  height: 38px;
+  min-height: 0;
+  padding: 3px;
+  width: 48px;
 }
 
 textarea {

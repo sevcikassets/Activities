@@ -11,6 +11,9 @@ from app import models
 from app.schemas import TimeEntryCreate
 
 
+PROJECT_TYPES = {"overhead", "standard", "approval"}
+
+
 FUEL_VEHICLES = [
     ("volvo-xc90", "Volvo", True, 1, ["EL6 14DE XC90"]),
     ("skoda-felicie", "Skoda Felicie", False, 2, ["ZLI 89-51 Natural 95", "ZLI 89-51 LPG"]),
@@ -84,6 +87,31 @@ def ensure_fuel_schema(db: Session) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_fuel_entries_source_row "
             "ON fuel_entries(source, source_sheet, source_row) "
             "WHERE source = 'excel' AND source_sheet IS NOT NULL AND source_row IS NOT NULL"
+        )
+    )
+    db.commit()
+
+
+def ensure_project_schema(db: Session) -> None:
+    db.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_type text NOT NULL DEFAULT 'standard'"))
+    db.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS default_category_code text REFERENCES categories(code)"))
+    db.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS approval_due_date date"))
+    db.execute(text("ALTER TABLE projects ADD COLUMN IF NOT EXISTS color text"))
+    db.execute(text("ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS approved_at timestamptz"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS idx_time_entries_unapproved ON time_entries(approved_at) WHERE approved_at IS NULL"))
+    # Entries predating this feature (or whose project no longer requires approval)
+    # are treated as already approved, so the "only unapproved" filter only ever
+    # surfaces entries actually tied to a project marked as needing approval.
+    db.execute(
+        text(
+            """
+            UPDATE time_entries te
+            SET approved_at = te.created_at
+            WHERE te.approved_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM projects p WHERE p.id = te.project_id AND p.project_type = 'approval'
+              )
+            """
         )
     )
     db.commit()
@@ -623,6 +651,76 @@ def get_or_create_category(db: Session, code: str | None) -> str | None:
     return code
 
 
+def list_categories(db: Session) -> list[models.Category]:
+    return db.scalars(select(models.Category).order_by(models.Category.code)).all()
+
+
+def list_projects(db: Session) -> list[models.Project]:
+    return db.scalars(select(models.Project).order_by(models.Project.name)).all()
+
+
+def create_project(
+    db: Session,
+    name: str,
+    project_type: str = "standard",
+    default_category_code: str | None = None,
+    approval_due_date: date | None = None,
+    color: str | None = None,
+) -> models.Project:
+    if project_type not in PROJECT_TYPES:
+        raise ValueError(f"Invalid project_type: {project_type}")
+    existing = db.scalar(select(models.Project).where(models.Project.name == name))
+    if existing:
+        raise ValueError("Project already exists.")
+    project = models.Project(
+        name=name,
+        normalized_name=normalize_name(name),
+        project_type=project_type,
+        default_category_code=default_category_code or None,
+        approval_due_date=approval_due_date if project_type == "approval" else None,
+        color=color or None,
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def update_project(
+    db: Session,
+    project_id,
+    name: str | None = None,
+    project_type: str | None = None,
+    default_category_code: str | None = None,
+    approval_due_date: date | None = None,
+    color: str | None = None,
+    is_active: bool | None = None,
+) -> models.Project | None:
+    project = db.scalar(select(models.Project).where(models.Project.id == project_id))
+    if not project:
+        return None
+    if name is not None:
+        project.name = name
+        project.normalized_name = normalize_name(name)
+    if project_type is not None:
+        if project_type not in PROJECT_TYPES:
+            raise ValueError(f"Invalid project_type: {project_type}")
+        project.project_type = project_type
+        if project_type != "approval":
+            project.approval_due_date = None
+    if default_category_code is not None:
+        project.default_category_code = default_category_code or None
+    if approval_due_date is not None:
+        project.approval_due_date = approval_due_date
+    if color is not None:
+        project.color = color or None
+    if is_active is not None:
+        project.is_active = is_active
+    db.commit()
+    db.refresh(project)
+    return project
+
+
 def get_or_create_transport(db: Session, name: str | None) -> models.Transport | None:
     if not name:
         return None
@@ -742,10 +840,16 @@ def create_time_entry(db: Session, payload: TimeEntryCreate, source: str = "manu
     ticket = get_or_create_ticket(db, payload.ticket_external_id, project)
     if ticket is None:
         ticket = find_valid_overhead_ticket(db, payload.project_name, payload.spent_on, payload.started_at)
-    category_code = get_or_create_category(db, payload.category_code or infer_category_code(payload.project_name))
+    category_code = get_or_create_category(
+        db,
+        payload.category_code
+        or (project.default_category_code if project else None)
+        or infer_category_code(payload.project_name),
+    )
     transport = get_or_create_transport(db, payload.transport_name)
     overlap_hours = calculate_overlap_hours(db, payload)
     duration_hours = calculate_duration_hours(payload)
+    requires_approval = bool(project and project.project_type == "approval")
     entry = models.TimeEntry(
         spent_on=payload.spent_on,
         started_at=payload.started_at,
@@ -760,6 +864,7 @@ def create_time_entry(db: Session, payload: TimeEntryCreate, source: str = "manu
         overlap_hours=overlap_hours,
         redmine_time=payload.redmine_time,
         reported_status=payload.reported_status,
+        approved_at=None if requires_approval else datetime.now(),
         source=source,
         raw_text=payload.raw_text,
     )
@@ -786,7 +891,12 @@ def update_time_entry(db: Session, entry_id, payload: TimeEntryCreate) -> models
     ticket = get_or_create_ticket(db, payload.ticket_external_id, project)
     if ticket is None:
         ticket = find_valid_overhead_ticket(db, payload.project_name, payload.spent_on, payload.started_at)
-    category_code = get_or_create_category(db, payload.category_code or infer_category_code(payload.project_name))
+    category_code = get_or_create_category(
+        db,
+        payload.category_code
+        or (project.default_category_code if project else None)
+        or infer_category_code(payload.project_name),
+    )
     transport = get_or_create_transport(db, payload.transport_name)
 
     entry.spent_on = payload.spent_on
@@ -803,10 +913,41 @@ def update_time_entry(db: Session, entry_id, payload: TimeEntryCreate) -> models
     entry.redmine_time = payload.redmine_time
     entry.reported_status = payload.reported_status
     entry.raw_text = payload.raw_text
+    if entry.approved_at is None and not (project and project.project_type == "approval"):
+        entry.approved_at = datetime.now()
     entry.updated_at = datetime.now()
     db.commit()
     db.refresh(entry)
     return entry
+
+
+def approve_time_entry(db: Session, entry_id) -> models.TimeEntry | None:
+    entry = db.scalar(
+        select(models.TimeEntry)
+        .options(
+            joinedload(models.TimeEntry.project),
+            joinedload(models.TimeEntry.ticket),
+            joinedload(models.TimeEntry.transport),
+        )
+        .where(models.TimeEntry.id == entry_id)
+    )
+    if not entry:
+        return None
+    entry.approved_at = datetime.now()
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def bulk_approve_time_entries(db: Session, entry_ids: list) -> int:
+    if not entry_ids:
+        return 0
+    entries = db.scalars(select(models.TimeEntry).where(models.TimeEntry.id.in_(entry_ids))).all()
+    now = datetime.now()
+    for entry in entries:
+        entry.approved_at = now
+    db.commit()
+    return len(entries)
 
 
 def delete_time_entry(db: Session, entry_id) -> bool:
@@ -825,6 +966,7 @@ def list_time_entries(
     project: str | None = None,
     ticket: str | None = None,
     text: str | None = None,
+    only_unapproved: bool = False,
     limit: int = 200,
 ):
     stmt = (
@@ -849,6 +991,8 @@ def list_time_entries(
         stmt = stmt.where(models.Ticket.external_id.ilike(f"%{ticket}%"))
     if text:
         stmt = stmt.where(models.TimeEntry.description.ilike(f"%{text}%"))
+    if only_unapproved:
+        stmt = stmt.where(models.TimeEntry.approved_at.is_(None))
     return db.scalars(stmt).all()
 
 

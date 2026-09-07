@@ -19,18 +19,24 @@ from app.db import SessionLocal, get_db
 from app.excel_import import import_workbook
 from app.fuel_ocr import FuelOcrUnavailable, parse_fuel_photos
 from app.repository import (
+    approve_time_entry,
+    bulk_approve_time_entries,
     category_comparison,
     category_period_summary,
     create_fuel_entry,
+    create_project,
     create_time_entry,
     delete_time_entry,
     ensure_fuel_schema,
+    ensure_project_schema,
     fuel_summary,
     get_fuel_vehicle,
     import_fuel_workbook,
+    list_categories,
     list_fuel_entries,
     list_fuel_vehicles,
     list_overhead_tickets,
+    list_projects,
     list_time_entries,
     monthly_summary,
     normalize_time_entry_descriptions,
@@ -39,12 +45,14 @@ from app.repository import (
     project_summary,
     seed_fuel_vehicles,
     update_fuel_entry,
+    update_project,
     update_time_entry,
     update_overhead_ticket_validity,
 )
 from app.schemas import (
     BulkUpdateResponse,
     CategoryComparisonOut,
+    CategoryOut,
     CategoryPeriodRow,
     CurrentUserOut,
     FuelEntryCreate,
@@ -59,10 +67,14 @@ from app.schemas import (
     OverheadTicketOut,
     OverheadTicketValidityUpdate,
     PeriodSummaryRow,
+    ProjectCreate,
+    ProjectOut,
     ProjectSummaryRow,
+    ProjectUpdate,
     SummaryRow,
     TextEntryParseRequest,
     TextEntryParseResponse,
+    TimeEntryBulkApprove,
     TimeEntryCreate,
     TimeEntryOut,
     UserCreate,
@@ -100,7 +112,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()")
     response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     return response
 
@@ -143,6 +155,7 @@ def _rate_limit_response() -> None:
 def startup() -> None:
     with SessionLocal() as db:
         ensure_fuel_schema(db)
+        ensure_project_schema(db)
         bootstrap_admin_user(db)
         seed_fuel_vehicles(db)
         normalize_time_entry_descriptions(db)
@@ -163,6 +176,18 @@ def display_transport_name(name: str | None) -> str | None:
     return name
 
 
+def serialize_project(project: models.Project) -> ProjectOut:
+    return ProjectOut(
+        id=project.id,
+        name=project.name,
+        is_active=project.is_active,
+        project_type=project.project_type,
+        default_category_code=project.default_category_code,
+        approval_due_date=project.approval_due_date,
+        color=project.color,
+    )
+
+
 def serialize_entry(entry: models.TimeEntry) -> TimeEntryOut:
     overlap_hours = entry.overlap_hours or Decimal("0")
     return TimeEntryOut(
@@ -177,9 +202,11 @@ def serialize_entry(entry: models.TimeEntry) -> TimeEntryOut:
         description=entry.description,
         ticket_external_id=entry.ticket.external_id if entry.ticket else None,
         project_name=entry.project.name if entry.project else None,
+        project_color=entry.project.color if entry.project else None,
         transport_name=display_transport_name(entry.transport.name if entry.transport else None),
         km=entry.km,
         reported_status=entry.reported_status,
+        approved_on=entry.approved_at.date() if entry.approved_at else None,
     )
 
 
@@ -313,6 +340,7 @@ def get_time_entries(
     project: str | None = None,
     ticket: str | None = None,
     text: str | None = None,
+    only_unapproved: bool = False,
     limit: int = 200,
     db: Session = Depends(get_db),
     _user: str = Depends(require_user),
@@ -323,7 +351,9 @@ def get_time_entries(
     parsed_to = date.fromisoformat(date_to) if date_to else None
     return [
         serialize_entry(entry)
-        for entry in list_time_entries(db, parsed_from, parsed_to, project, ticket, text, limit)
+        for entry in list_time_entries(
+            db, parsed_from, parsed_to, project, ticket, text, only_unapproved, limit
+        )
     ]
 
 
@@ -351,6 +381,83 @@ def remove_time_entry(
     return {"deleted": True}
 
 
+@app.patch("/time-entries/{entry_id}/approve", response_model=TimeEntryOut)
+def approve_entry(
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> TimeEntryOut:
+    entry = approve_time_entry(db, entry_id)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Time entry not found.")
+    return serialize_entry(entry)
+
+
+@app.patch("/time-entries/approve", response_model=BulkUpdateResponse)
+def approve_entries_bulk(
+    payload: TimeEntryBulkApprove,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> BulkUpdateResponse:
+    updated_count = bulk_approve_time_entries(db, payload.ids)
+    return BulkUpdateResponse(updated_count=updated_count)
+
+
+@app.get("/categories", response_model=list[CategoryOut])
+def get_categories(db: Session = Depends(get_db), _user: AuthUser = Depends(require_user)) -> list[CategoryOut]:
+    return [CategoryOut(code=category.code, name=category.name, description=category.description) for category in list_categories(db)]
+
+
+@app.get("/projects", response_model=list[ProjectOut])
+def get_projects(db: Session = Depends(get_db), _user: AuthUser = Depends(require_user)) -> list[ProjectOut]:
+    return [serialize_project(project) for project in list_projects(db)]
+
+
+@app.post("/projects", response_model=ProjectOut)
+def add_project(
+    payload: ProjectCreate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_admin),
+) -> ProjectOut:
+    try:
+        project = create_project(
+            db,
+            payload.name,
+            payload.project_type,
+            payload.default_category_code,
+            payload.approval_due_date,
+            payload.color,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return serialize_project(project)
+
+
+@app.put("/projects/{project_id}", response_model=ProjectOut)
+def edit_project(
+    project_id: UUID,
+    payload: ProjectUpdate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_admin),
+) -> ProjectOut:
+    try:
+        project = update_project(
+            db,
+            project_id,
+            payload.name,
+            payload.project_type,
+            payload.default_category_code,
+            payload.approval_due_date,
+            payload.color,
+            payload.is_active,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+    return serialize_project(project)
+
+
 @app.get("/time-entries/export.xlsx")
 def export_time_entries(
     date_from: str | None = None,
@@ -358,6 +465,7 @@ def export_time_entries(
     project: str | None = None,
     ticket: str | None = None,
     text: str | None = None,
+    only_unapproved: bool = False,
     db: Session = Depends(get_db),
     _user: AuthUser = Depends(require_user),
 ) -> StreamingResponse:
@@ -365,7 +473,12 @@ def export_time_entries(
 
     parsed_from = date.fromisoformat(date_from) if date_from else None
     parsed_to = date.fromisoformat(date_to) if date_to else None
-    rows = [serialize_entry(entry) for entry in list_time_entries(db, parsed_from, parsed_to, project, ticket, text, 500)]
+    rows = [
+        serialize_entry(entry)
+        for entry in list_time_entries(
+            db, parsed_from, parsed_to, project, ticket, text, only_unapproved, limit=500
+        )
+    ]
 
     workbook = Workbook()
     sheet = workbook.active

@@ -33,9 +33,11 @@ class TimeEntryOut(BaseModel):
     description: str
     ticket_external_id: str | None
     project_name: str | None
+    project_color: str | None
     transport_name: str | None
     km: Decimal | None
     reported_status: str | None
+    approved_on: date | None
 
 
 class TextEntryParseRequest(BaseModel):
@@ -70,10 +72,47 @@ class BulkUpdateResponse(BaseModel):
     updated_count: int
 
 
+class TimeEntryBulkApprove(BaseModel):
+    ids: list[UUID]
+
+
 class SummaryRow(BaseModel):
     year: int
     month: int
     hours: Decimal
+
+
+class CategoryOut(BaseModel):
+    code: str
+    name: str
+    description: str | None
+
+
+class ProjectOut(BaseModel):
+    id: UUID
+    name: str
+    is_active: bool
+    project_type: str
+    default_category_code: str | None
+    approval_due_date: date | None
+    color: str | None
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    project_type: str = "standard"
+    default_category_code: str | None = None
+    approval_due_date: date | None = None
+    color: str | None = None
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    project_type: str | None = None
+    default_category_code: str | None = None
+    approval_due_date: date | None = None
+    color: str | None = None
+    is_active: bool | None = None
 
 
 class ProjectSummaryRow(BaseModel):

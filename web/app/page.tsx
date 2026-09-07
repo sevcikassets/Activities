@@ -1,11 +1,11 @@
 "use client";
 
-import { BarChart3, CheckSquare, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
+import { BarChart3, Briefcase, CheckSquare, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
 import { Fragment, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-type Section = "activities" | "statistics" | "fuel" | "overhead" | "users";
+type Section = "activities" | "statistics" | "fuel" | "overhead" | "projects" | "users";
 type SummaryGroup = "day" | "week" | "month" | "year";
 
 type ProjectRow = {
@@ -74,9 +74,37 @@ type ActivityRow = {
   description: string;
   ticket_external_id: string | null;
   project_name: string | null;
+  project_color: string | null;
   transport_name: string | null;
   km: string | null;
   reported_status: string | null;
+  approved_on: string | null;
+};
+
+type ProjectType = "overhead" | "standard" | "approval";
+
+type Project = {
+  id: string;
+  name: string;
+  is_active: boolean;
+  project_type: ProjectType;
+  default_category_code: string | null;
+  approval_due_date: string | null;
+  color: string | null;
+};
+
+type ProjectDraft = {
+  name: string;
+  project_type: ProjectType;
+  default_category_code: string;
+  approval_due_date: string;
+  color: string;
+};
+
+type Category = {
+  code: string;
+  name: string;
+  description: string | null;
 };
 
 type FuelVehicle = {
@@ -189,6 +217,7 @@ type Filters = {
   project: string;
   ticket: string;
   text: string;
+  only_unapproved: string;
 };
 
 function dateInputValue(value: Date) {
@@ -245,7 +274,16 @@ const defaultFilters: Filters = {
   date_to: "",
   project: "",
   ticket: "",
-  text: ""
+  text: "",
+  only_unapproved: ""
+};
+
+const emptyProjectDraft: ProjectDraft = {
+  name: "",
+  project_type: "standard",
+  default_category_code: "",
+  approval_due_date: "",
+  color: "#15616d"
 };
 
 const categorySeries = [
@@ -261,6 +299,7 @@ const sections: { id: Section; label: string; icon: typeof Table2; adminOnly?: b
   { id: "statistics", label: "Statistiky", icon: BarChart3 },
   { id: "fuel", label: "PHM", icon: Fuel },
   { id: "overhead", label: "Rezijni tikety", icon: Ticket },
+  { id: "projects", label: "Projekty", icon: Briefcase, adminOnly: true },
   { id: "users", label: "Uzivatele", icon: Users, adminOnly: true }
 ];
 
@@ -744,6 +783,9 @@ export default function Home() {
   const [token, setToken] = useState("");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [projectDraft, setProjectDraft] = useState<ProjectDraft>(emptyProjectDraft);
   const [userDraft, setUserDraft] = useState<UserDraft>(emptyUserDraft);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -939,9 +981,27 @@ export default function Home() {
     setUsers(await response.json());
   }
 
+  async function loadProjects() {
+    const response = await apiFetch("/projects");
+    setProjects(await response.json());
+  }
+
+  async function loadCategories() {
+    const response = await apiFetch("/categories");
+    setCategories(await response.json());
+  }
+
   async function refreshAll() {
     const user = currentUser ?? await loadCurrentUser();
-    const requests = [loadActivities(), loadStats(), loadOverheadTickets(), loadCategoryComparison(), loadFuelVehicles()];
+    const requests = [
+      loadActivities(),
+      loadStats(),
+      loadOverheadTickets(),
+      loadCategoryComparison(),
+      loadFuelVehicles(),
+      loadProjects(),
+      loadCategories()
+    ];
     if (user.role === "admin") {
       requests.push(loadUsers());
     }
@@ -1025,6 +1085,8 @@ export default function Home() {
     setOverheadTickets([]);
     setCategoryComparison(null);
     setUsers([]);
+    setProjects([]);
+    setCategories([]);
   }
 
   async function saveEntry(event?: FormEvent) {
@@ -1414,6 +1476,74 @@ export default function Home() {
     await loadUsers();
   }
 
+  async function saveProject(event: FormEvent) {
+    event.preventDefault();
+    const response = await apiFetch("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: projectDraft.name,
+        project_type: projectDraft.project_type,
+        default_category_code: projectDraft.default_category_code || null,
+        approval_due_date: projectDraft.project_type === "approval" ? projectDraft.approval_due_date || null : null,
+        color: projectDraft.color || null
+      })
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => null);
+      setMessage(result?.detail || "Projekt se nepodarilo ulozit.");
+      return;
+    }
+    setMessage("Projekt ulozen.");
+    setProjectDraft(emptyProjectDraft);
+    await loadProjects();
+  }
+
+  async function updateProjectRow(
+    projectId: string,
+    payload: Partial<{ name: string; project_type: ProjectType; default_category_code: string; approval_due_date: string | null; color: string; is_active: boolean }>
+  ) {
+    const response = await apiFetch(`/projects/${projectId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => null);
+      setMessage(result?.detail || "Projekt se nepodarilo upravit.");
+      return;
+    }
+    await loadProjects();
+  }
+
+  async function approveActivity(entryId: string) {
+    const response = await apiFetch(`/time-entries/${entryId}/approve`, { method: "PATCH" });
+    if (!response.ok) {
+      setMessage("Aktivitu se nepodarilo schvalit.");
+      return;
+    }
+    setMessage("Aktivita schvalena.");
+    await loadActivities();
+  }
+
+  async function approveSelectedActivities() {
+    if (!selectedActivityIds.length) {
+      return;
+    }
+    const response = await apiFetch("/time-entries/approve", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: selectedActivityIds })
+    });
+    if (!response.ok) {
+      setMessage("Aktivity se nepodarilo schvalit.");
+      return;
+    }
+    const result = await response.json();
+    setMessage(`Schvaleno ${result.updated_count} aktivit.`);
+    await loadActivities();
+  }
+
   function switchSection(nextSection: Section) {
     setSection(nextSection);
     setMenuOpen(false);
@@ -1751,11 +1881,14 @@ export default function Home() {
                   <label>Skutecne<input readOnly value={draftEffectiveHours} /></label>
                   <label>Kat.<input value={draft.category_code} onChange={(e) => updateDraftDetail({ category_code: e.target.value }, false)} /></label>
                   <label>Tiket<input value={draft.ticket_external_id} onChange={(e) => updateDraftDetail({ ticket_external_id: e.target.value }, false)} /></label>
-                  <label>Zakazka<input value={draft.project_name} onChange={(e) => updateProject(e.target.value)} /></label>
+                  <label>Zakazka<input list="project-options" value={draft.project_name} onChange={(e) => updateProject(e.target.value)} /></label>
                   <label>Doprava<input list="transport-options" value={draft.transport_name} onChange={(e) => updateDraftDetail({ transport_name: e.target.value }, false)} /></label>
                   <label>km<input type="number" step="0.1" value={draft.km} onChange={(e) => updateDraftDetail({ km: e.target.value }, false)} /></label>
                   <label>Zapsano<input value={draft.reported_status} onChange={(e) => updateDraftDetail({ reported_status: e.target.value }, false)} /></label>
                 </div>
+                <datalist id="project-options">
+                  {projects.map((project) => <option key={project.id} value={project.name} />)}
+                </datalist>
                 <datalist id="transport-options">
                   {transportOptions.map((transport) => <option key={transport} value={transport} />)}
                 </datalist>
@@ -1798,6 +1931,11 @@ export default function Home() {
                   <button type="button" className="secondary" onClick={openBulkCopy}>
                     <CheckSquare size={18} /> Kopie{selectedActivityIds.length ? ` (${selectedActivityIds.length})` : ""}
                   </button>
+                  {selectedActivityIds.length > 0 && (
+                    <button type="button" className="secondary" onClick={approveSelectedActivities}>
+                      <CheckSquare size={18} /> Schvalit ({selectedActivityIds.length})
+                    </button>
+                  )}
                   <button type="button" className="secondary" onClick={exportActivities}><Download size={18} /> Excel</button>
                 </div>
               </div>
@@ -1808,6 +1946,14 @@ export default function Home() {
                   <label>Zakazka<input value={filters.project} onChange={(e) => setFilters({ ...filters, project: e.target.value })} /></label>
                   <label>Tiket<input value={filters.ticket} onChange={(e) => setFilters({ ...filters, ticket: e.target.value })} /></label>
                   <label>Text<input value={filters.text} onChange={(e) => setFilters({ ...filters, text: e.target.value })} /></label>
+                  <label className="checkLabel">
+                    <input
+                      type="checkbox"
+                      checked={filters.only_unapproved === "true"}
+                      onChange={(e) => setFilters({ ...filters, only_unapproved: e.target.checked ? "true" : "" })}
+                    />
+                    Jen neschvalene
+                  </label>
                   <button type="submit"><Search size={18} /> Filtrovat</button>
                 </form>
               )}
@@ -1825,7 +1971,7 @@ export default function Home() {
                   <thead>
                     <tr>
                       <th><input type="checkbox" checked={activities.length > 0 && selectedActivityIds.length === activities.length} onChange={(event) => toggleAllVisibleActivities(event.target.checked)} /></th>
-                      <th>Datum</th><th>Den</th><th>Od</th><th>Do</th><th>Zadano</th><th>Prekryv</th><th>Skutecne</th><th>Kat.</th><th>Tiket</th><th>Zakazka</th><th>Doprava</th><th>km</th><th>Popis</th><th></th>
+                      <th>Datum</th><th>Den</th><th>Od</th><th>Do</th><th>Zadano</th><th>Prekryv</th><th>Skutecne</th><th>Kat.</th><th>Tiket</th><th>Zakazka</th><th>Doprava</th><th>km</th><th>Popis</th><th>Schvaleno</th><th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1843,10 +1989,22 @@ export default function Home() {
                             <td>{row.effective_hours}</td>
                             <td>{row.category_code}</td>
                             <td>{row.ticket_external_id}</td>
-                            <td>{row.project_name}</td>
+                            <td>
+                              {row.project_color && <span className="colorDot" style={{ background: row.project_color }} />}
+                              {row.project_name}
+                            </td>
                             <td>{row.transport_name}</td>
                             <td>{formatKm(row.km)}</td>
                             <td className="descriptionCell">{row.description}</td>
+                            <td>
+                              {row.approved_on ? (
+                                row.approved_on
+                              ) : (
+                                <button type="button" className="iconButton secondary" onClick={() => approveActivity(row.id)} title="Schvalit aktivitu">
+                                  <CheckSquare size={16} />
+                                </button>
+                              )}
+                            </td>
                             <td className="rowActions">
                               <button className="iconButton secondary" onClick={() => editRow(row)} title="Upravit radek"><Edit3 size={16} /></button>
                               <button className="iconButton secondary" onClick={() => copyRow(row)} title="Kopirovat radek"><Copy size={16} /></button>
@@ -1859,7 +2017,7 @@ export default function Home() {
                           <td>{group.hours}</td>
                           <td></td>
                           <td>{group.effectiveHours}</td>
-                          <td colSpan={7}></td>
+                          <td colSpan={8}></td>
                         </tr>
                       </Fragment>
                     ))}
@@ -2243,6 +2401,90 @@ export default function Home() {
                         />
                       </td>
                       <td>{user.username === currentUser.username ? "Prave prihlasen" : ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {section === "projects" && currentUser?.role === "admin" && (
+          <section className="panel widePanel">
+            <div className="panelHeader">
+              <div>
+                <h2>Sprava projektu</h2>
+                <p className="muted">Typ projektu urcuje vychozi kategorii aktivit a zda se aktivity musi rucne schvalovat.</p>
+              </div>
+              <Briefcase size={18} />
+            </div>
+            <form className="userForm" onSubmit={saveProject}>
+              <label>Nazev<input value={projectDraft.name} onChange={(event) => setProjectDraft({ ...projectDraft, name: event.target.value })} /></label>
+              <label>
+                Typ aktivity
+                <select value={projectDraft.default_category_code} onChange={(event) => setProjectDraft({ ...projectDraft, default_category_code: event.target.value })}>
+                  <option value="">-</option>
+                  {categories.map((category) => <option key={category.code} value={category.code}>{category.name}</option>)}
+                </select>
+              </label>
+              <label>
+                Typ projektu
+                <select value={projectDraft.project_type} onChange={(event) => setProjectDraft({ ...projectDraft, project_type: event.target.value as ProjectType })}>
+                  <option value="standard">Standardni</option>
+                  <option value="overhead">Rezijni</option>
+                  <option value="approval">Schvalovat</option>
+                </select>
+              </label>
+              {projectDraft.project_type === "approval" && (
+                <label>Schvalit do<input type="date" required value={projectDraft.approval_due_date} onChange={(event) => setProjectDraft({ ...projectDraft, approval_due_date: event.target.value })} /></label>
+              )}
+              <label>Barva<input type="color" value={projectDraft.color || "#15616d"} onChange={(event) => setProjectDraft({ ...projectDraft, color: event.target.value })} /></label>
+              <button type="submit"><Save size={18} /> Pridat</button>
+            </form>
+            <div className="tableWrap">
+              <table>
+                <thead><tr><th>Projekt</th><th>Typ aktivity</th><th>Typ projektu</th><th>Schvalit do</th><th>Barva</th><th>Stav</th></tr></thead>
+                <tbody>
+                  {projects.map((project) => (
+                    <tr key={project.id}>
+                      <td>{project.name}</td>
+                      <td>
+                        <select
+                          value={project.default_category_code ?? ""}
+                          onChange={(event) => updateProjectRow(project.id, { default_category_code: event.target.value })}
+                        >
+                          <option value="">-</option>
+                          {categories.map((category) => <option key={category.code} value={category.code}>{category.name}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select
+                          value={project.project_type}
+                          onChange={(event) => updateProjectRow(project.id, { project_type: event.target.value as ProjectType })}
+                        >
+                          <option value="standard">Standardni</option>
+                          <option value="overhead">Rezijni</option>
+                          <option value="approval">Schvalovat</option>
+                        </select>
+                      </td>
+                      <td>
+                        {project.project_type === "approval" ? (
+                          <input
+                            type="date"
+                            value={project.approval_due_date ?? ""}
+                            onChange={(event) => updateProjectRow(project.id, { approval_due_date: event.target.value || null })}
+                          />
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td><input type="color" value={project.color ?? "#15616d"} onChange={(event) => updateProjectRow(project.id, { color: event.target.value })} /></td>
+                      <td>
+                        <label className="checkLabel tableCheck">
+                          <input type="checkbox" checked={project.is_active} onChange={(event) => updateProjectRow(project.id, { is_active: event.target.checked })} />
+                          {project.is_active ? "Aktivni" : "Neaktivni"}
+                        </label>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -24,6 +24,10 @@ class Project(Base):
     name: Mapped[str] = mapped_column(Text, unique=True)
     normalized_name: Mapped[str] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    project_type: Mapped[str] = mapped_column(Text, default="standard")
+    default_category_code: Mapped[str | None] = mapped_column(Text, ForeignKey("categories.code"))
+    approval_due_date: Mapped[date | None] = mapped_column(Date)
+    color: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -80,6 +84,7 @@ class TimeEntry(Base):
     overlap_hours: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), default=0)
     redmine_time: Mapped[str | None] = mapped_column(Text)
     reported_status: Mapped[str | None] = mapped_column(Text)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     source: Mapped[str] = mapped_column(Text, default="manual")
     source_row: Mapped[int | None]
     raw_text: Mapped[str | None] = mapped_column(Text)

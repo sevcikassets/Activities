@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - "api/**"
+      - "db/init/**"
       - ".github/workflows/api-tests.yml"
   pull_request:
     paths:
       - "api/**"
+      - "db/init/**"
       - ".github/workflows/api-tests.yml"
 
 jobs:
@@ -16,10 +18,29 @@ jobs:
     defaults:
       run:
         working-directory: api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: activities
+          POSTGRES_USER: activities
+          POSTGRES_PASSWORD: activities
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U activities -d activities"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://activities:activities@localhost:5432/activities
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
+      - run: psql -h localhost -U activities -d activities -f ../db/init/001_schema.sql
+        env:
+          PGPASSWORD: activities
       - run: pytest
