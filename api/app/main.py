@@ -21,6 +21,8 @@ from app.fuel_ocr import FuelOcrUnavailable, parse_fuel_photos
 from app.repository import (
     approve_time_entry,
     bulk_approve_time_entries,
+    bulk_unapprove_time_entries,
+    bulk_update_project,
     category_comparison,
     category_period_summary,
     create_fuel_entry,
@@ -44,6 +46,7 @@ from app.repository import (
     period_summary,
     project_summary,
     seed_fuel_vehicles,
+    unapprove_time_entry,
     update_fuel_entry,
     update_project,
     update_time_entry,
@@ -75,6 +78,7 @@ from app.schemas import (
     TextEntryParseRequest,
     TextEntryParseResponse,
     TimeEntryBulkApprove,
+    TimeEntryBulkProjectUpdate,
     TimeEntryCreate,
     TimeEntryOut,
     UserCreate,
@@ -400,6 +404,38 @@ def approve_entries_bulk(
     _user: AuthUser = Depends(require_editor),
 ) -> BulkUpdateResponse:
     updated_count = bulk_approve_time_entries(db, payload.ids)
+    return BulkUpdateResponse(updated_count=updated_count)
+
+
+@app.patch("/time-entries/{entry_id}/unapprove", response_model=TimeEntryOut)
+def unapprove_entry(
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> TimeEntryOut:
+    entry = unapprove_time_entry(db, entry_id)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Time entry not found.")
+    return serialize_entry(entry)
+
+
+@app.patch("/time-entries/unapprove", response_model=BulkUpdateResponse)
+def unapprove_entries_bulk(
+    payload: TimeEntryBulkApprove,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> BulkUpdateResponse:
+    updated_count = bulk_unapprove_time_entries(db, payload.ids)
+    return BulkUpdateResponse(updated_count=updated_count)
+
+
+@app.patch("/time-entries/project", response_model=BulkUpdateResponse)
+def update_entries_project_bulk(
+    payload: TimeEntryBulkProjectUpdate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> BulkUpdateResponse:
+    updated_count = bulk_update_project(db, payload.ids, payload.project_name)
     return BulkUpdateResponse(updated_count=updated_count)
 
 

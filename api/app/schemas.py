@@ -76,6 +76,11 @@ class TimeEntryBulkApprove(BaseModel):
     ids: list[UUID]
 
 
+class TimeEntryBulkProjectUpdate(BaseModel):
+    ids: list[UUID]
+    project_name: str
+
+
 class SummaryRow(BaseModel):
     year: int
     month: int

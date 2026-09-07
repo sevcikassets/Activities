@@ -532,6 +532,13 @@ h2 {
   font-size: 13px;
 }
 
+.approvedCell {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
 .colorDot {
   border-radius: 999px;
   display: inline-block;

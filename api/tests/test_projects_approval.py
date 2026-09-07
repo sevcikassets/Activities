@@ -7,16 +7,21 @@ pytest.importorskip("psycopg")
 
 from sqlalchemy import text
 
+from app import models
 from app.auth import bootstrap_admin_user, ensure_user_schema
 from app.db import SessionLocal
 from app.repository import (
     approve_time_entry,
     bulk_approve_time_entries,
+    bulk_unapprove_time_entries,
+    bulk_update_project,
     create_project,
     create_time_entry,
     ensure_fuel_schema,
     ensure_project_schema,
+    list_projects,
     list_time_entries,
+    unapprove_time_entry,
     update_project,
     update_time_entry,
 )
@@ -49,6 +54,7 @@ def _bootstrap_schema():
 def db():
     session = SessionLocal()
     session.execute(text("DELETE FROM time_entries"))
+    session.execute(text("DELETE FROM tickets"))
     session.execute(text("DELETE FROM projects"))
     session.commit()
     yield session
@@ -172,3 +178,99 @@ def test_migration_leaves_legacy_rows_on_approval_projects_untouched(db):
     ensure_project_schema(db)
     approved_at = db.execute(text("SELECT approved_at FROM time_entries WHERE description = 'legacy pending row'")).scalar()
     assert approved_at is None
+
+
+def test_renaming_to_an_existing_project_name_merges_them(db):
+    typo_project = create_project(db, "ZAKOSMLS", project_type="standard")
+    target_project = create_project(db, "ZAKO SMLS", project_type="approval", approval_due_date=date(2026, 12, 31))
+    entry = create_time_entry(db, _entry("ZAKOSMLS", "misfiled entry"))
+
+    result = update_project(db, typo_project.id, name="ZAKO SMLS")
+
+    assert result.id == target_project.id
+    assert result.name == "ZAKO SMLS"
+    remaining = [p.id for p in list_projects(db)]
+    assert typo_project.id not in remaining
+    assert target_project.id in remaining
+    db.refresh(entry)
+    assert entry.project_id == target_project.id
+
+
+def test_renaming_to_a_free_name_just_renames(db):
+    project = create_project(db, "Old Name", project_type="standard")
+    result = update_project(db, project.id, name="New Name")
+    assert result.id == project.id
+    assert result.name == "New Name"
+
+
+def test_merge_moves_tickets_too(db):
+    typo_project = create_project(db, "TypoCo", project_type="standard")
+    target_project = create_project(db, "TargetCo", project_type="standard")
+    ticket = models.Ticket(external_id="T-1", project_id=typo_project.id)
+    db.add(ticket)
+    db.commit()
+
+    update_project(db, typo_project.id, name="TargetCo")
+
+    db.refresh(ticket)
+    assert ticket.project_id == target_project.id
+
+
+def test_unapprove_time_entry_clears_timestamp(db):
+    create_project(db, "Standard", project_type="standard")
+    entry = create_time_entry(db, _entry("Standard"))
+    assert entry.approved_at is not None
+    unapproved = unapprove_time_entry(db, entry.id)
+    assert unapproved.approved_at is None
+
+
+def test_bulk_unapprove_time_entries(db):
+    create_project(db, "Standard", project_type="standard")
+    entry = create_time_entry(db, _entry("Standard"))
+    count = bulk_unapprove_time_entries(db, [entry.id])
+    assert count == 1
+    db.refresh(entry)
+    assert entry.approved_at is None
+
+
+def test_bulk_update_project_reassigns_entries(db):
+    create_project(db, "Wrong", project_type="standard")
+    create_project(db, "Right", project_type="standard")
+    entry = create_time_entry(db, _entry("Wrong"))
+    count = bulk_update_project(db, [entry.id], "Right")
+    assert count == 1
+    db.refresh(entry)
+    assert entry.project.name == "Right"
+
+
+def test_bulk_update_project_fills_missing_category_from_new_project(db):
+    create_project(db, "Wrong", project_type="standard")
+    create_project(db, "Right", project_type="standard", default_category_code="A")
+    entry = create_time_entry(db, _entry("Wrong"))
+    assert entry.category_code is None
+    bulk_update_project(db, [entry.id], "Right")
+    db.refresh(entry)
+    assert entry.category_code == "A"
+
+
+def test_bulk_update_project_keeps_existing_category(db):
+    create_project(db, "Wrong", project_type="standard")
+    create_project(db, "Right", project_type="standard", default_category_code="A")
+    payload = _entry("Wrong")
+    payload.category_code = "S"
+    entry = create_time_entry(db, payload)
+    bulk_update_project(db, [entry.id], "Right")
+    db.refresh(entry)
+    assert entry.category_code == "S"
+
+
+def test_bulk_update_project_to_approval_project_leaves_new_entries_unapproved(db):
+    create_project(db, "Wrong", project_type="standard")
+    create_project(db, "NeedsApproval", project_type="approval")
+    entry = create_time_entry(db, _entry("Wrong"))
+    assert entry.approved_at is not None
+    bulk_update_project(db, [entry.id], "NeedsApproval")
+    db.refresh(entry)
+    # Moving to an approval-required project does not retroactively revoke
+    # an approval the entry already had.
+    assert entry.approved_at is not None

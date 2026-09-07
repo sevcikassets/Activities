@@ -4,7 +4,7 @@ from decimal import Decimal
 import re
 from unicodedata import normalize
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.orm import Session, joinedload
 
 from app import models
@@ -699,9 +699,20 @@ def update_project(
     project = db.scalar(select(models.Project).where(models.Project.id == project_id))
     if not project:
         return None
-    if name is not None:
-        project.name = name
-        project.normalized_name = normalize_name(name)
+    if name is not None and name != project.name:
+        duplicate = db.scalar(select(models.Project).where(models.Project.name == name))
+        if duplicate and duplicate.id != project.id:
+            # Renaming onto an existing project name merges the two: move every
+            # reference across and drop the now-redundant row, rather than
+            # failing on the projects.name unique constraint.
+            db.execute(update(models.TimeEntry).where(models.TimeEntry.project_id == project.id).values(project_id=duplicate.id))
+            db.execute(update(models.Ticket).where(models.Ticket.project_id == project.id).values(project_id=duplicate.id))
+            db.delete(project)
+            db.flush()
+            project = duplicate
+        else:
+            project.name = name
+            project.normalized_name = normalize_name(name)
     if project_type is not None:
         if project_type not in PROJECT_TYPES:
             raise ValueError(f"Invalid project_type: {project_type}")
@@ -946,6 +957,50 @@ def bulk_approve_time_entries(db: Session, entry_ids: list) -> int:
     now = datetime.now()
     for entry in entries:
         entry.approved_at = now
+    db.commit()
+    return len(entries)
+
+
+def unapprove_time_entry(db: Session, entry_id) -> models.TimeEntry | None:
+    entry = db.scalar(
+        select(models.TimeEntry)
+        .options(
+            joinedload(models.TimeEntry.project),
+            joinedload(models.TimeEntry.ticket),
+            joinedload(models.TimeEntry.transport),
+        )
+        .where(models.TimeEntry.id == entry_id)
+    )
+    if not entry:
+        return None
+    entry.approved_at = None
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def bulk_unapprove_time_entries(db: Session, entry_ids: list) -> int:
+    if not entry_ids:
+        return 0
+    entries = db.scalars(select(models.TimeEntry).where(models.TimeEntry.id.in_(entry_ids))).all()
+    for entry in entries:
+        entry.approved_at = None
+    db.commit()
+    return len(entries)
+
+
+def bulk_update_project(db: Session, entry_ids: list, project_name: str) -> int:
+    if not entry_ids:
+        return 0
+    project = get_or_create_project(db, project_name)
+    entries = db.scalars(select(models.TimeEntry).where(models.TimeEntry.id.in_(entry_ids))).all()
+    requires_approval = bool(project and project.project_type == "approval")
+    for entry in entries:
+        entry.project_id = project.id if project else None
+        if not entry.category_code and project and project.default_category_code:
+            entry.category_code = get_or_create_category(db, project.default_category_code)
+        if entry.approved_at is None and not requires_approval:
+            entry.approved_at = datetime.now()
     db.commit()
     return len(entries)
 

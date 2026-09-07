@@ -794,6 +794,10 @@ export default function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activityFiltersOpen, setActivityFiltersOpen] = useState(false);
   const [bulkCopyOpen, setBulkCopyOpen] = useState(false);
+  const [bulkProjectOpen, setBulkProjectOpen] = useState(false);
+  const [bulkProjectName, setBulkProjectName] = useState("");
+  const [projectFilterText, setProjectFilterText] = useState("");
+  const [projectFilterType, setProjectFilterType] = useState<ProjectType | "">("");
   const [fuelStatsOpen, setFuelStatsOpen] = useState(false);
 
   const totalVisibleHours = useMemo(
@@ -866,6 +870,18 @@ export default function Home() {
     () => Object.values(filters).filter(Boolean).length,
     [filters]
   );
+  const filteredProjects = useMemo(() => {
+    const needle = projectFilterText.trim().toLowerCase();
+    return projects.filter((project) => {
+      if (projectFilterType && project.project_type !== projectFilterType) {
+        return false;
+      }
+      if (needle && !project.name.toLowerCase().includes(needle)) {
+        return false;
+      }
+      return true;
+    });
+  }, [projects, projectFilterText, projectFilterType]);
   const draftOverlapHours = useMemo(
     () => overlapHoursForDraft(activities, draft, editingEntryId),
     [activities, draft, editingEntryId]
@@ -1421,6 +1437,42 @@ export default function Home() {
     setBulkCopyOpen(true);
   }
 
+  function openBulkProject() {
+    if (!selectedActivities.length) {
+      setMessage("Nejdrive vyberte aktivity ke zmene projektu.");
+      return;
+    }
+    setBulkProjectName("");
+    setBulkProjectOpen(true);
+  }
+
+  async function changeSelectedActivitiesProject(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedActivityIds.length || !bulkProjectName.trim()) {
+      return;
+    }
+    const response = await apiFetch("/time-entries/project", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: selectedActivityIds, project_name: bulkProjectName.trim() })
+    });
+    if (!response.ok) {
+      setMessage("Nepodarilo se zmenit projekt u vybranych aktivit.");
+      return;
+    }
+    const result = await response.json();
+    setMessage(`Projekt zmenen u ${result.updated_count} aktivit.`);
+    setBulkProjectOpen(false);
+    await Promise.all([loadActivities(), loadProjects()]);
+  }
+
+  function viewProjectActivities(projectName: string) {
+    setFilters({ ...defaultFilters, project: projectName });
+    setActivityFiltersOpen(true);
+    switchSection("activities");
+    loadActivities({ ...defaultFilters, project: projectName });
+  }
+
   async function bulkUpdateOverheadValidity(event: FormEvent) {
     event.preventDefault();
     const externalIds = overheadTickets.map((ticket) => ticket.external_id);
@@ -1513,6 +1565,10 @@ export default function Home() {
       setMessage(result?.detail || "Projekt se nepodarilo upravit.");
       return;
     }
+    const updated = await response.json();
+    if (payload.name && updated.id !== projectId) {
+      setMessage(`Projekt byl slouceny do existujiciho projektu "${updated.name}".`);
+    }
     await loadProjects();
   }
 
@@ -1541,6 +1597,34 @@ export default function Home() {
     }
     const result = await response.json();
     setMessage(`Schvaleno ${result.updated_count} aktivit.`);
+    await loadActivities();
+  }
+
+  async function unapproveActivity(entryId: string) {
+    const response = await apiFetch(`/time-entries/${entryId}/unapprove`, { method: "PATCH" });
+    if (!response.ok) {
+      setMessage("Nepodarilo se odvolat schvaleni.");
+      return;
+    }
+    setMessage("Schvaleni odvolano.");
+    await loadActivities();
+  }
+
+  async function unapproveSelectedActivities() {
+    if (!selectedActivityIds.length) {
+      return;
+    }
+    const response = await apiFetch("/time-entries/unapprove", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: selectedActivityIds })
+    });
+    if (!response.ok) {
+      setMessage("Nepodarilo se odvolat schvaleni vybranych aktivit.");
+      return;
+    }
+    const result = await response.json();
+    setMessage(`Odvolano schvaleni u ${result.updated_count} aktivit.`);
     await loadActivities();
   }
 
@@ -1936,6 +2020,16 @@ export default function Home() {
                       <CheckSquare size={18} /> Schvalit ({selectedActivityIds.length})
                     </button>
                   )}
+                  {selectedActivityIds.length > 0 && (
+                    <button type="button" className="secondary" onClick={unapproveSelectedActivities}>
+                      <X size={18} /> Odvolat schvaleni ({selectedActivityIds.length})
+                    </button>
+                  )}
+                  {selectedActivityIds.length > 0 && (
+                    <button type="button" className="secondary" onClick={openBulkProject}>
+                      <Briefcase size={18} /> Zmenit projekt ({selectedActivityIds.length})
+                    </button>
+                  )}
                   <button type="button" className="secondary" onClick={exportActivities}><Download size={18} /> Excel</button>
                 </div>
               </div>
@@ -1963,6 +2057,14 @@ export default function Home() {
                   <span className="bulkInfo">Vybrano {selectedActivityIds.length}</span>
                   <button type="submit"><CheckSquare size={18} /> Zkopirovat vybrane</button>
                   <button type="button" className="secondary" onClick={() => setBulkCopyOpen(false)}><X size={18} /> Zrusit</button>
+                </form>
+              )}
+              {bulkProjectOpen && (
+                <form className="bulkCopyForm" onSubmit={changeSelectedActivitiesProject}>
+                  <label>Novy projekt<input list="project-options" value={bulkProjectName} onChange={(event) => setBulkProjectName(event.target.value)} /></label>
+                  <span className="bulkInfo">Vybrano {selectedActivityIds.length}</span>
+                  <button type="submit"><Briefcase size={18} /> Prevest na projekt</button>
+                  <button type="button" className="secondary" onClick={() => setBulkProjectOpen(false)}><X size={18} /> Zrusit</button>
                 </form>
               )}
 
@@ -1998,7 +2100,12 @@ export default function Home() {
                             <td className="descriptionCell">{row.description}</td>
                             <td>
                               {row.approved_on ? (
-                                row.approved_on
+                                <span className="approvedCell">
+                                  {row.approved_on}
+                                  <button type="button" className="iconButton secondary" onClick={() => unapproveActivity(row.id)} title="Odvolat schvaleni">
+                                    <X size={14} />
+                                  </button>
+                                </span>
                               ) : (
                                 <button type="button" className="iconButton secondary" onClick={() => approveActivity(row.id)} title="Schvalit aktivitu">
                                   <CheckSquare size={16} />
@@ -2424,7 +2531,7 @@ export default function Home() {
                 Typ aktivity
                 <select value={projectDraft.default_category_code} onChange={(event) => setProjectDraft({ ...projectDraft, default_category_code: event.target.value })}>
                   <option value="">-</option>
-                  {categories.map((category) => <option key={category.code} value={category.code}>{category.name}</option>)}
+                  {categories.map((category) => <option key={category.code} value={category.code}>{category.code} - {category.name}</option>)}
                 </select>
               </label>
               <label>
@@ -2441,20 +2548,46 @@ export default function Home() {
               <label>Barva<input type="color" value={projectDraft.color || "#15616d"} onChange={(event) => setProjectDraft({ ...projectDraft, color: event.target.value })} /></label>
               <button type="submit"><Save size={18} /> Pridat</button>
             </form>
+            <form className="filterBar" onSubmit={(event) => event.preventDefault()}>
+              <label>Hledat<input value={projectFilterText} onChange={(event) => setProjectFilterText(event.target.value)} placeholder="Nazev projektu" /></label>
+              <label>
+                Typ projektu
+                <select value={projectFilterType} onChange={(event) => setProjectFilterType(event.target.value as ProjectType | "")}>
+                  <option value="">Vsechny</option>
+                  <option value="standard">Standardni</option>
+                  <option value="overhead">Rezijni</option>
+                  <option value="approval">Schvalovat</option>
+                </select>
+              </label>
+            </form>
             <div className="tableWrap">
               <table>
-                <thead><tr><th>Projekt</th><th>Typ aktivity</th><th>Typ projektu</th><th>Schvalit do</th><th>Barva</th><th>Stav</th></tr></thead>
+                <thead><tr><th>Projekt</th><th>Typ aktivity</th><th>Typ projektu</th><th>Schvalit do</th><th>Barva</th><th>Stav</th><th></th></tr></thead>
                 <tbody>
-                  {projects.map((project) => (
+                  {filteredProjects.map((project) => (
                     <tr key={project.id}>
-                      <td>{project.name}</td>
+                      <td>
+                        <input
+                          key={project.id}
+                          defaultValue={project.name}
+                          title="Zmenou nazvu na jiz existujici projekt oba projekty sloucite"
+                          onBlur={(event) => {
+                            const nextName = event.target.value.trim();
+                            if (nextName && nextName !== project.name) {
+                              updateProjectRow(project.id, { name: nextName });
+                            } else {
+                              event.target.value = project.name;
+                            }
+                          }}
+                        />
+                      </td>
                       <td>
                         <select
                           value={project.default_category_code ?? ""}
                           onChange={(event) => updateProjectRow(project.id, { default_category_code: event.target.value })}
                         >
                           <option value="">-</option>
-                          {categories.map((category) => <option key={category.code} value={category.code}>{category.name}</option>)}
+                          {categories.map((category) => <option key={category.code} value={category.code}>{category.code} - {category.name}</option>)}
                         </select>
                       </td>
                       <td>
@@ -2484,6 +2617,11 @@ export default function Home() {
                           <input type="checkbox" checked={project.is_active} onChange={(event) => updateProjectRow(project.id, { is_active: event.target.checked })} />
                           {project.is_active ? "Aktivni" : "Neaktivni"}
                         </label>
+                      </td>
+                      <td className="rowActions">
+                        <button type="button" className="iconButton secondary" onClick={() => viewProjectActivities(project.name)} title="Zobrazit aktivity projektu">
+                          <Search size={16} />
+                        </button>
                       </td>
                     </tr>
                   ))}
