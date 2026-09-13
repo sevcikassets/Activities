@@ -14,6 +14,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Also on shared_infra so other apps on this host (financesema-app) can
+    # read from this database directly - read-only cross-app integration,
+    # e.g. FinanceSEMA showing an asset's linked Activities project and its
+    # time entries. Requires `docker network create shared_infra` once.
+    networks:
+      default:
+      shared_infra:
+        aliases:
+          - activities-db
 
   api:
     build:
@@ -55,3 +64,8 @@ services:
 
 volumes:
   activities-db:
+
+networks:
+  default:
+  shared_infra:
+    external: true
