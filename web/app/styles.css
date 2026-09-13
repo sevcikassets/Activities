@@ -548,6 +548,11 @@ h2 {
   width: 9px;
 }
 
+.projectCell {
+  min-width: 140px;
+  white-space: nowrap;
+}
+
 label {
   color: #46546a;
   display: grid;

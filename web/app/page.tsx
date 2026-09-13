@@ -2144,7 +2144,7 @@ export default function Home() {
                             <td>{row.effective_hours}</td>
                             <td>{row.category_code}</td>
                             <td>{row.ticket_external_id}</td>
-                            <td>
+                            <td className="projectCell">
                               {row.project_color && <span className="colorDot" style={{ background: row.project_color }} />}
                               {row.project_name}
                             </td>
