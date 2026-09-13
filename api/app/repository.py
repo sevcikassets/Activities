@@ -732,6 +732,16 @@ def update_project(
     return project
 
 
+def bulk_update_project_color(db: Session, project_ids: list, color: str) -> int:
+    if not project_ids:
+        return 0
+    projects = db.scalars(select(models.Project).where(models.Project.id.in_(project_ids))).all()
+    for project in projects:
+        project.color = color or None
+    db.commit()
+    return len(projects)
+
+
 def get_or_create_transport(db: Session, name: str | None) -> models.Transport | None:
     if not name:
         return None

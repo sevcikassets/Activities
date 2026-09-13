@@ -23,6 +23,7 @@ from app.repository import (
     bulk_approve_time_entries,
     bulk_unapprove_time_entries,
     bulk_update_project,
+    bulk_update_project_color,
     category_comparison,
     category_period_summary,
     create_fuel_entry,
@@ -70,6 +71,7 @@ from app.schemas import (
     OverheadTicketOut,
     OverheadTicketValidityUpdate,
     PeriodSummaryRow,
+    ProjectBulkColorUpdate,
     ProjectCreate,
     ProjectOut,
     ProjectSummaryRow,
@@ -492,6 +494,16 @@ def edit_project(
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     return serialize_project(project)
+
+
+@app.patch("/projects/color", response_model=BulkUpdateResponse)
+def update_projects_color_bulk(
+    payload: ProjectBulkColorUpdate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_admin),
+) -> BulkUpdateResponse:
+    updated_count = bulk_update_project_color(db, payload.ids, payload.color)
+    return BulkUpdateResponse(updated_count=updated_count)
 
 
 @app.get("/time-entries/export.xlsx")

@@ -15,6 +15,7 @@ from app.repository import (
     bulk_approve_time_entries,
     bulk_unapprove_time_entries,
     bulk_update_project,
+    bulk_update_project_color,
     create_project,
     create_time_entry,
     ensure_fuel_schema,
@@ -274,3 +275,19 @@ def test_bulk_update_project_to_approval_project_leaves_new_entries_unapproved(d
     # Moving to an approval-required project does not retroactively revoke
     # an approval the entry already had.
     assert entry.approved_at is not None
+
+
+def test_bulk_update_project_color_applies_to_all_selected(db):
+    first = create_project(db, "First", project_type="standard")
+    second = create_project(db, "Second", project_type="standard")
+    untouched = create_project(db, "Untouched", project_type="standard", color="#000000")
+
+    count = bulk_update_project_color(db, [first.id, second.id], "#ff0000")
+
+    assert count == 2
+    db.refresh(first)
+    db.refresh(second)
+    db.refresh(untouched)
+    assert first.color == "#ff0000"
+    assert second.color == "#ff0000"
+    assert untouched.color == "#000000"

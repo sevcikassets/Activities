@@ -798,6 +798,8 @@ export default function Home() {
   const [bulkProjectName, setBulkProjectName] = useState("");
   const [projectFilterText, setProjectFilterText] = useState("");
   const [projectFilterType, setProjectFilterType] = useState<ProjectType | "">("");
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [bulkProjectColor, setBulkProjectColor] = useState("#15616d");
   const [fuelStatsOpen, setFuelStatsOpen] = useState(false);
 
   const totalVisibleHours = useMemo(
@@ -1107,6 +1109,9 @@ export default function Home() {
 
   async function saveEntry(event?: FormEvent) {
     event?.preventDefault();
+    if (!confirmProjectUsage(draft.project_name)) {
+      return;
+    }
     const response = await apiFetch(editingEntryId ? `/time-entries/${editingEntryId}` : "/time-entries", {
       method: editingEntryId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -1451,6 +1456,9 @@ export default function Home() {
     if (!selectedActivityIds.length || !bulkProjectName.trim()) {
       return;
     }
+    if (!confirmProjectUsage(bulkProjectName)) {
+      return;
+    }
     const response = await apiFetch("/time-entries/project", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1570,6 +1578,51 @@ export default function Home() {
       setMessage(`Projekt byl slouceny do existujiciho projektu "${updated.name}".`);
     }
     await loadProjects();
+  }
+
+  function toggleProjectSelection(id: string) {
+    setSelectedProjectIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  }
+
+  function toggleAllVisibleProjects(checked: boolean) {
+    setSelectedProjectIds(checked ? filteredProjects.map((project) => project.id) : []);
+  }
+
+  async function applyBulkProjectColor() {
+    if (!selectedProjectIds.length) {
+      setMessage("Nejdrive vyberte projekty, kterym chcete nastavit barvu.");
+      return;
+    }
+    const response = await apiFetch("/projects/color", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: selectedProjectIds, color: bulkProjectColor })
+    });
+    if (!response.ok) {
+      setMessage("Nepodarilo se nastavit barvu vybranych projektu.");
+      return;
+    }
+    const result = await response.json();
+    setMessage(`Barva nastavena u ${result.updated_count} projektu.`);
+    setSelectedProjectIds([]);
+    await loadProjects();
+  }
+
+  function confirmProjectUsage(projectName: string): boolean {
+    const trimmed = projectName.trim();
+    if (!trimmed) {
+      return true;
+    }
+    const existing = projects.find((project) => project.name === trimmed);
+    if (existing) {
+      if (!existing.is_active) {
+        return window.confirm(`Projekt "${trimmed}" je oznacen jako neaktivni. Opravdu chcete pokracovat?`);
+      }
+      return true;
+    }
+    return window.confirm(`Projekt "${trimmed}" zatim neexistuje. Ulozenim se zalozi novy projekt. Pokracovat?`);
   }
 
   async function approveActivity(entryId: string) {
@@ -2560,12 +2613,26 @@ export default function Home() {
                 </select>
               </label>
             </form>
+            {selectedProjectIds.length > 0 && (
+              <form className="bulkCopyForm" onSubmit={(event) => { event.preventDefault(); applyBulkProjectColor(); }}>
+                <label>Barva pro vybrane<input type="color" value={bulkProjectColor} onChange={(event) => setBulkProjectColor(event.target.value)} /></label>
+                <span className="bulkInfo">Vybrano {selectedProjectIds.length}</span>
+                <button type="submit"><Save size={18} /> Nastavit barvu vybranym</button>
+                <button type="button" className="secondary" onClick={() => setSelectedProjectIds([])}><X size={18} /> Zrusit vyber</button>
+              </form>
+            )}
             <div className="tableWrap">
               <table>
-                <thead><tr><th>Projekt</th><th>Typ aktivity</th><th>Typ projektu</th><th>Schvalit do</th><th>Barva</th><th>Stav</th><th></th></tr></thead>
+                <thead>
+                  <tr>
+                    <th><input type="checkbox" checked={filteredProjects.length > 0 && selectedProjectIds.length === filteredProjects.length} onChange={(event) => toggleAllVisibleProjects(event.target.checked)} /></th>
+                    <th>Projekt</th><th>Typ aktivity</th><th>Typ projektu</th><th>Schvalit do</th><th>Barva</th><th>Stav</th><th></th>
+                  </tr>
+                </thead>
                 <tbody>
                   {filteredProjects.map((project) => (
                     <tr key={project.id}>
+                      <td><input type="checkbox" checked={selectedProjectIds.includes(project.id)} onChange={() => toggleProjectSelection(project.id)} /></td>
                       <td>
                         <input
                           key={project.id}

@@ -120,6 +120,11 @@ class ProjectUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class ProjectBulkColorUpdate(BaseModel):
+    ids: list[UUID]
+    color: str
+
+
 class ProjectSummaryRow(BaseModel):
     project_name: str
     hours: Decimal
