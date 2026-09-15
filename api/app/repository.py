@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timedelta
 import calendar
 from decimal import Decimal
+from pathlib import Path
 import re
 from unicodedata import normalize
 
@@ -232,6 +233,20 @@ def update_fuel_entry(db: Session, entry_id, payload):
     recalculate_fuel_vehicle(db, vehicle_id)
     db.refresh(entry)
     return entry
+
+
+def delete_fuel_entry(db: Session, entry_id) -> bool:
+    entry = db.scalar(select(models.FuelEntry).where(models.FuelEntry.id == entry_id))
+    if not entry:
+        return False
+    vehicle_id = entry.vehicle_id
+    for photo_path in (entry.receipt_photo_path, entry.dashboard_photo_path):
+        if photo_path:
+            Path(photo_path).unlink(missing_ok=True)
+    db.delete(entry)
+    db.commit()
+    recalculate_fuel_vehicle(db, vehicle_id)
+    return True
 
 
 def _fuel_payload_with_calculations(db: Session, vehicle_id, payload) -> dict:

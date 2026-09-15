@@ -29,6 +29,7 @@ from app.repository import (
     create_fuel_entry,
     create_project,
     create_time_entry,
+    delete_fuel_entry,
     delete_time_entry,
     ensure_fuel_schema,
     ensure_project_schema,
@@ -715,6 +716,17 @@ def edit_fuel_entry(
     if not entry:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fuel entry not found or vehicle is inactive.")
     return serialize_fuel_entry(entry)
+
+
+@app.delete("/fuel/entries/{entry_id}")
+def remove_fuel_entry(
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> dict:
+    if not delete_fuel_entry(db, entry_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fuel entry not found.")
+    return {"deleted": True}
 
 
 @app.post("/fuel/imports/excel", response_model=FuelImportResponse)

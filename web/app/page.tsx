@@ -1872,6 +1872,23 @@ export default function Home() {
     setDashboardPhoto(null);
   }
 
+  async function deleteFuelRow(row: FuelEntry) {
+    const confirmed = window.confirm(`Opravdu smazat tankovani ${row.purchased_on} (${row.station || "bez stanice"})?`);
+    if (!confirmed) {
+      return;
+    }
+    const response = await apiFetch(`/fuel/entries/${row.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      setMessage("Zaznam PHM se nepodarilo smazat.");
+      return;
+    }
+    if (editingFuelEntryId === row.id) {
+      cancelFuelEdit();
+    }
+    setMessage("Zaznam PHM smazan.");
+    await loadFuelEntries(selectedFuelVehicleId);
+  }
+
   function cancelFuelEdit() {
     setEditingFuelEntryId(null);
     setFuelDraft({ ...emptyFuelDraft, vehicle_id: selectedFuelVehicleId, purchased_on: today() });
@@ -2454,6 +2471,7 @@ export default function Home() {
                       <td>{row.entry.source}</td>
                       <td className="rowActions">
                         <button className="iconButton secondary" disabled={!selectedFuelVehicle?.is_active} onClick={() => editFuelRow(row.entry)} title="Upravit PHM"><Edit3 size={16} /></button>
+                        <button className="iconButton danger" disabled={!selectedFuelVehicle?.is_active} onClick={() => deleteFuelRow(row.entry)} title="Smazat PHM"><Trash2 size={16} /></button>
                       </td>
                     </tr>
                   ))}
