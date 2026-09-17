@@ -149,3 +149,25 @@ class FuelEntry(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     vehicle: Mapped[FuelVehicle] = relationship(back_populates="fuel_entries")
+
+
+class WeightEntry(Base):
+    __tablename__ = "weight_entries"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    measured_on: Mapped[date] = mapped_column(Date)
+    measured_at: Mapped[time | None] = mapped_column(Time)
+    weight_kg: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    height_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    body_fat_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    body_fat_mass_kg: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    muscle_mass_kg: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    skeletal_muscle_mass_kg: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    basal_metabolic_rate: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    total_body_water: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    vfa_level: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    note: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text, default="manual")
+    source_uuid: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

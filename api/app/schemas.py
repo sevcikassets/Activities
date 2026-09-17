@@ -262,6 +262,37 @@ class FuelPhotoParseResponse(BaseModel):
     raw_text: str
 
 
+class WeightEntryCreate(BaseModel):
+    measured_on: date
+    measured_at: time | None = None
+    weight_kg: Decimal
+    body_fat_percent: Decimal | None = None
+    muscle_mass_kg: Decimal | None = None
+    note: str | None = None
+
+
+class WeightEntryOut(BaseModel):
+    id: UUID
+    measured_on: date
+    measured_at: time | None
+    weight_kg: Decimal
+    height_cm: Decimal | None
+    body_fat_percent: Decimal | None
+    body_fat_mass_kg: Decimal | None
+    muscle_mass_kg: Decimal | None
+    skeletal_muscle_mass_kg: Decimal | None
+    basal_metabolic_rate: Decimal | None
+    total_body_water: Decimal | None
+    vfa_level: Decimal | None
+    note: str | None
+    source: str
+
+
+class WeightImportResponse(BaseModel):
+    imported_rows: int
+    skipped_rows: int
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str

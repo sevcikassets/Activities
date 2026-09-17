@@ -120,6 +120,26 @@ CREATE TABLE IF NOT EXISTS fuel_entries (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS weight_entries (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    measured_on date NOT NULL,
+    measured_at time,
+    weight_kg numeric(6, 2) NOT NULL,
+    height_cm numeric(6, 2),
+    body_fat_percent numeric(5, 2),
+    body_fat_mass_kg numeric(6, 2),
+    muscle_mass_kg numeric(6, 2),
+    skeletal_muscle_mass_kg numeric(6, 2),
+    basal_metabolic_rate numeric(8, 2),
+    total_body_water numeric(6, 2),
+    vfa_level numeric(6, 2),
+    note text,
+    source text NOT NULL DEFAULT 'manual',
+    source_uuid text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_time_entries_spent_on ON time_entries(spent_on);
 CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id);
 CREATE INDEX IF NOT EXISTS idx_time_entries_ticket ON time_entries(ticket_id);
@@ -131,6 +151,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_time_entries_source_row
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fuel_entries_source_row
     ON fuel_entries(source, source_sheet, source_row)
     WHERE source = 'excel' AND source_sheet IS NOT NULL AND source_row IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_weight_entries_measured ON weight_entries(measured_on, measured_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_weight_entries_source_uuid
+    ON weight_entries(source_uuid)
+    WHERE source_uuid IS NOT NULL;
 
 INSERT INTO categories (code, name, description) VALUES
     ('S', 'Soukrome', 'Soukrome aktivity'),

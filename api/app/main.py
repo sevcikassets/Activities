@@ -18,6 +18,7 @@ from app.config import settings
 from app.db import SessionLocal, get_db
 from app.excel_import import import_workbook
 from app.fuel_ocr import FuelOcrUnavailable, parse_fuel_photos
+from app.weight_import import import_weight_export
 from app.repository import (
     approve_time_entry,
     bulk_approve_time_entries,
@@ -29,10 +30,13 @@ from app.repository import (
     create_fuel_entry,
     create_project,
     create_time_entry,
+    create_weight_entry,
     delete_fuel_entry,
     delete_time_entry,
+    delete_weight_entry,
     ensure_fuel_schema,
     ensure_project_schema,
+    ensure_weight_schema,
     fuel_summary,
     get_fuel_vehicle,
     import_fuel_workbook,
@@ -42,6 +46,7 @@ from app.repository import (
     list_overhead_tickets,
     list_projects,
     list_time_entries,
+    list_weight_entries,
     monthly_summary,
     normalize_time_entry_descriptions,
     parse_text_entry,
@@ -89,6 +94,9 @@ from app.schemas import (
     UserUpdate,
     VoiceParseRequest,
     VoiceParseResponse,
+    WeightEntryCreate,
+    WeightEntryOut,
+    WeightImportResponse,
 )
 from app.voice import parse_voice_text
 
@@ -163,6 +171,7 @@ def startup() -> None:
     with SessionLocal() as db:
         ensure_fuel_schema(db)
         ensure_project_schema(db)
+        ensure_weight_schema(db)
         bootstrap_admin_user(db)
         seed_fuel_vehicles(db)
         normalize_time_entry_descriptions(db)
@@ -243,6 +252,25 @@ def serialize_fuel_entry(entry: models.FuelEntry) -> FuelEntryOut:
     )
 
 
+def serialize_weight_entry(entry: models.WeightEntry) -> WeightEntryOut:
+    return WeightEntryOut(
+        id=entry.id,
+        measured_on=entry.measured_on,
+        measured_at=entry.measured_at,
+        weight_kg=entry.weight_kg,
+        height_cm=entry.height_cm,
+        body_fat_percent=entry.body_fat_percent,
+        body_fat_mass_kg=entry.body_fat_mass_kg,
+        muscle_mass_kg=entry.muscle_mass_kg,
+        skeletal_muscle_mass_kg=entry.skeletal_muscle_mass_kg,
+        basal_metabolic_rate=entry.basal_metabolic_rate,
+        total_body_water=entry.total_body_water,
+        vfa_level=entry.vfa_level,
+        note=entry.note,
+        source=entry.source,
+    )
+
+
 def decimal_or_none(value: str | None) -> Decimal | None:
     if not value:
         return None
@@ -258,6 +286,8 @@ def bool_or_none(value: str | None) -> bool | None:
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
 ALLOWED_WORKBOOK_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
+MAX_WEIGHT_IMPORT_BYTES = 200 * 1024 * 1024
+ALLOWED_WEIGHT_IMPORT_SUFFIXES = {".csv", ".zip"}
 
 
 async def read_upload(file: UploadFile, max_bytes: int, *, require_image: bool = False) -> bytes:
@@ -880,3 +910,63 @@ async def import_excel(
     finally:
         tmp_path.unlink(missing_ok=True)
     return result
+
+
+@app.get("/weight/entries", response_model=list[WeightEntryOut])
+def get_weight_entries(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 5000,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_user),
+) -> list[WeightEntryOut]:
+    from datetime import date
+
+    parsed_from = date.fromisoformat(date_from) if date_from else None
+    parsed_to = date.fromisoformat(date_to) if date_to else None
+    return [serialize_weight_entry(entry) for entry in list_weight_entries(db, parsed_from, parsed_to, limit)]
+
+
+@app.post("/weight/entries", response_model=WeightEntryOut)
+def add_weight_entry(
+    payload: WeightEntryCreate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> WeightEntryOut:
+    return serialize_weight_entry(create_weight_entry(db, payload))
+
+
+@app.delete("/weight/entries/{entry_id}")
+def remove_weight_entry(
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> dict:
+    if not delete_weight_entry(db, entry_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weight entry not found.")
+    return {"deleted": True}
+
+
+@app.post("/weight/imports/samsung-health", response_model=WeightImportResponse)
+async def import_weight_samsung_health(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_admin),
+) -> WeightImportResponse:
+    suffix = Path(file.filename or "export.zip").suffix or ".zip"
+    if suffix.lower() not in ALLOWED_WEIGHT_IMPORT_SUFFIXES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Ocekavan je soubor .csv nebo .zip z exportu Samsung Health.",
+        )
+    data = await read_upload(file, MAX_WEIGHT_IMPORT_BYTES)
+    with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(data)
+        tmp_path = Path(tmp.name)
+    try:
+        result = import_weight_export(db, tmp_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return WeightImportResponse(**result)

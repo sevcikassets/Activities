@@ -737,6 +737,29 @@ button {
   width: 9px;
 }
 
+.weightChartWrap {
+  margin-top: 8px;
+}
+
+.weightLineChart {
+  cursor: grab;
+  height: 260px;
+  touch-action: none;
+  width: 100%;
+}
+
+.weightLineChart:active {
+  cursor: grabbing;
+}
+
+.weightChartHint {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
 .barChart {
   align-items: end;
   display: grid;

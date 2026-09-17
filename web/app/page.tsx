@@ -1,11 +1,11 @@
 "use client";
 
-import { BarChart3, Briefcase, CheckSquare, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Users, X } from "lucide-react";
-import { Fragment, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, BarChart3, Briefcase, CheckSquare, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Upload, Users, X } from "lucide-react";
+import { Fragment, FormEvent, KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-type Section = "activities" | "statistics" | "fuel" | "overhead" | "projects" | "users";
+type Section = "activities" | "statistics" | "fuel" | "weight" | "overhead" | "projects" | "users";
 type SummaryGroup = "day" | "week" | "month" | "year";
 
 type ProjectRow = {
@@ -169,6 +169,41 @@ type FuelConsumptionPoint = {
   entries: number;
 };
 
+type WeightEntry = {
+  id: string;
+  measured_on: string;
+  measured_at: string | null;
+  weight_kg: string;
+  height_cm: string | null;
+  body_fat_percent: string | null;
+  body_fat_mass_kg: string | null;
+  muscle_mass_kg: string | null;
+  skeletal_muscle_mass_kg: string | null;
+  basal_metabolic_rate: string | null;
+  total_body_water: string | null;
+  vfa_level: string | null;
+  note: string | null;
+  source: string;
+};
+
+type WeightDraft = {
+  measured_on: string;
+  measured_at: string;
+  weight_kg: string;
+  body_fat_percent: string;
+  muscle_mass_kg: string;
+  note: string;
+};
+
+type WeightScale = "week" | "month" | "year" | "5y" | "all";
+
+type WeightSeriesPoint = {
+  id: string;
+  timestamp: number;
+  label: string;
+  value: number;
+};
+
 type OverheadTicket = {
   external_id: string;
   project_name: string | null;
@@ -267,6 +302,23 @@ const emptyFuelDraft: FuelDraft = {
   note: ""
 };
 
+const WEIGHT_SCALE_LABELS: Record<WeightScale, string> = {
+  week: "Tyden",
+  month: "Mesic",
+  year: "Rok",
+  "5y": "5 let",
+  all: "Vse"
+};
+
+const emptyWeightDraft: WeightDraft = {
+  measured_on: today(),
+  measured_at: "",
+  weight_kg: "",
+  body_fat_percent: "",
+  muscle_mass_kg: "",
+  note: ""
+};
+
 const transportOptions = ["Volvo XC90", "vlak", "autobus", "MHD"];
 
 const defaultFilters: Filters = {
@@ -298,6 +350,7 @@ const sections: { id: Section; label: string; icon: typeof Table2; adminOnly?: b
   { id: "activities", label: "Aktivity", icon: Table2 },
   { id: "statistics", label: "Statistiky", icon: BarChart3 },
   { id: "fuel", label: "PHM", icon: Fuel },
+  { id: "weight", label: "Hmotnost", icon: Activity },
   { id: "overhead", label: "Rezijni tikety", icon: Ticket },
   { id: "projects", label: "Projekty", icon: Briefcase, adminOnly: true },
   { id: "users", label: "Uzivatele", icon: Users, adminOnly: true }
@@ -400,6 +453,16 @@ function formatNumber(value: string | number | null | undefined, digits = 2, min
     minimumFractionDigits: minimumDigits,
     maximumFractionDigits: digits
   }).format(Number(value));
+}
+
+function computeBmi(weightKg: string | null, heightCm: string | null): number | null {
+  const weight = Number(weightKg);
+  const height = Number(heightCm);
+  if (!weight || !height) {
+    return null;
+  }
+  const heightMeters = height / 100;
+  return weight / (heightMeters * heightMeters);
 }
 
 function formatBool(value: boolean | null) {
@@ -665,6 +728,330 @@ function buildFuelPricePoints(entries: FuelEntry[], match: (type: string) => boo
     }));
 }
 
+function startOfWeek(value: Date): Date {
+  const date = new Date(value);
+  const dayIndex = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - dayIndex);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function weightRangeFor(scale: WeightScale, anchor: string, entries: WeightEntry[]): { from: Date; to: Date } {
+  const anchorDate = new Date(`${anchor}T00:00:00`);
+  if (scale === "week") {
+    const from = startOfWeek(anchorDate);
+    const to = new Date(from);
+    to.setDate(to.getDate() + 7);
+    to.setMilliseconds(-1);
+    return { from, to };
+  }
+  if (scale === "month") {
+    const from = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+    const to = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 1);
+    to.setMilliseconds(-1);
+    return { from, to };
+  }
+  if (scale === "year") {
+    const from = new Date(anchorDate.getFullYear(), 0, 1);
+    const to = new Date(anchorDate.getFullYear() + 1, 0, 1);
+    to.setMilliseconds(-1);
+    return { from, to };
+  }
+  if (scale === "5y") {
+    const from = new Date(anchorDate.getFullYear() - 4, 0, 1);
+    const to = new Date(anchorDate.getFullYear() + 1, 0, 1);
+    to.setMilliseconds(-1);
+    return { from, to };
+  }
+  if (!entries.length) {
+    return { from: new Date(anchorDate.getFullYear(), 0, 1), to: anchorDate };
+  }
+  const timestamps = entries.map((entry) => new Date(`${entry.measured_on}T${entry.measured_at ?? "12:00:00"}`).getTime());
+  const from = new Date(Math.min(...timestamps));
+  from.setHours(0, 0, 0, 0);
+  const to = new Date(Math.max(...timestamps));
+  to.setHours(23, 59, 59, 999);
+  return { from, to };
+}
+
+function shiftWeightAnchor(scale: WeightScale, anchor: string, direction: 1 | -1): string {
+  const date = new Date(`${anchor}T00:00:00`);
+  if (scale === "week") {
+    date.setDate(date.getDate() + 7 * direction);
+  } else if (scale === "month") {
+    date.setMonth(date.getMonth() + direction);
+  } else if (scale === "5y") {
+    date.setFullYear(date.getFullYear() + 5 * direction);
+  } else {
+    date.setFullYear(date.getFullYear() + direction);
+  }
+  return dateInputValue(date);
+}
+
+function formatWeightRangeLabel(scale: WeightScale, from: Date, to: Date): string {
+  if (scale === "week") {
+    const dayMonth = (value: Date) => `${value.getDate()}. ${value.getMonth() + 1}.`;
+    return `${dayMonth(from)} - ${dayMonth(to)} ${to.getFullYear()}`;
+  }
+  if (scale === "month") {
+    return from.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" });
+  }
+  if (scale === "year") {
+    return `${from.getFullYear()}`;
+  }
+  if (from.getFullYear() === to.getFullYear()) {
+    return `${from.getFullYear()}`;
+  }
+  return `${from.getFullYear()} - ${to.getFullYear()}`;
+}
+
+function buildWeightSeries(entries: WeightEntry[], from: Date, to: Date): WeightSeriesPoint[] {
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+  return entries
+    .map((entry) => {
+      const timestamp = new Date(`${entry.measured_on}T${entry.measured_at ?? "12:00:00"}`).getTime();
+      return {
+        id: entry.id,
+        timestamp,
+        label: `${entry.measured_on} ${timeValue(entry.measured_at)}`.trim(),
+        value: Number(entry.weight_kg)
+      };
+    })
+    .filter((point) => point.timestamp >= fromMs && point.timestamp <= toMs)
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+const MONTH_SHORT_LABELS = ["Led", "Uno", "Bre", "Dub", "Kve", "Cvn", "Cvc", "Srp", "Zar", "Rij", "Lis", "Pro"];
+
+type WeightAxisTick = { timestamp: number; label: string };
+
+function buildWeightXTicks(from: Date, to: Date): WeightAxisTick[] {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const spanMs = Math.max(1, to.getTime() - from.getTime());
+
+  if (spanMs <= 2 * dayMs) {
+    const ticks: WeightAxisTick[] = [];
+    const cursor = new Date(from);
+    cursor.setMinutes(0, 0, 0);
+    while (cursor.getTime() <= to.getTime()) {
+      ticks.push({ timestamp: cursor.getTime(), label: cursor.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" }) });
+      cursor.setHours(cursor.getHours() + 6);
+    }
+    return ticks;
+  }
+
+  if (spanMs <= 9 * dayMs) {
+    const ticks: WeightAxisTick[] = [];
+    const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    while (cursor.getTime() <= to.getTime()) {
+      ticks.push({ timestamp: cursor.getTime(), label: `${cursor.getDate()}.${cursor.getMonth() + 1}.` });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return ticks;
+  }
+
+  if (spanMs <= 65 * dayMs) {
+    const ticks: WeightAxisTick[] = [];
+    const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    while (cursor.getTime() <= to.getTime()) {
+      ticks.push({ timestamp: cursor.getTime(), label: `${cursor.getDate()}.${cursor.getMonth() + 1}.` });
+      cursor.setDate(cursor.getDate() + 7);
+    }
+    return ticks;
+  }
+
+  if (spanMs <= 500 * dayMs) {
+    const ticks: WeightAxisTick[] = [];
+    const cursor = new Date(from.getFullYear(), from.getMonth(), 1);
+    while (cursor.getTime() <= to.getTime()) {
+      ticks.push({ timestamp: cursor.getTime(), label: `${MONTH_SHORT_LABELS[cursor.getMonth()]} ${cursor.getFullYear()}` });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return ticks;
+  }
+
+  const startYear = from.getFullYear();
+  const endYear = to.getFullYear();
+  const yearCount = endYear - startYear + 1;
+  const yearStep = yearCount > 10 ? 2 : 1;
+  const ticks: WeightAxisTick[] = [];
+  for (let year = startYear; year <= endYear; year += yearStep) {
+    ticks.push({ timestamp: new Date(year, 0, 1).getTime(), label: `${year}` });
+  }
+  return ticks;
+}
+
+function buildWeightYTicks(minValue: number, maxValue: number, count = 4): number[] {
+  if (maxValue <= minValue) {
+    return [minValue];
+  }
+  const step = (maxValue - minValue) / (count - 1);
+  return Array.from({ length: count }, (_, index) => minValue + step * index);
+}
+
+function WeightLineChart({ points, from, to }: { points: WeightSeriesPoint[]; from: Date; to: Date }) {
+  const width = 720;
+  const height = 260;
+  const paddingLeft = 46;
+  const paddingRight = 16;
+  const paddingTop = 16;
+  const paddingBottom = 30;
+  const plotWidth = width - paddingLeft - paddingRight;
+  const plotHeight = height - paddingTop - paddingBottom;
+
+  const outerFrom = from.getTime();
+  const outerTo = to.getTime();
+  const outerSpan = Math.max(1, outerTo - outerFrom);
+
+  const [viewRange, setViewRange] = useState({ from: outerFrom, to: outerTo });
+  useEffect(() => {
+    setViewRange({ from: outerFrom, to: outerTo });
+  }, [outerFrom, outerTo]);
+
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragState = useRef<{ startClientX: number; startFrom: number; startTo: number } | null>(null);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) {
+      return;
+    }
+    function handleWheel(event: WheelEvent) {
+      event.preventDefault();
+      const rect = svg!.getBoundingClientRect();
+      const offsetX = ((event.clientX - rect.left) / rect.width) * width;
+      const ratio = Math.min(1, Math.max(0, (offsetX - paddingLeft) / plotWidth));
+      setViewRange((current) => {
+        const currentSpan = current.to - current.from;
+        const cursorTime = current.from + ratio * currentSpan;
+        const zoomFactor = event.deltaY > 0 ? 1.15 : 1 / 1.15;
+        const minSpan = Math.max(60 * 60 * 1000, outerSpan / 500);
+        const newSpan = Math.min(outerSpan, Math.max(minSpan, currentSpan * zoomFactor));
+        let newFrom = cursorTime - ratio * newSpan;
+        let newTo = newFrom + newSpan;
+        if (newFrom < outerFrom) {
+          newFrom = outerFrom;
+          newTo = newFrom + newSpan;
+        }
+        if (newTo > outerTo) {
+          newTo = outerTo;
+          newFrom = newTo - newSpan;
+        }
+        return { from: newFrom, to: newTo };
+      });
+    }
+    svg.addEventListener("wheel", handleWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", handleWheel);
+  }, [outerFrom, outerTo, outerSpan, plotWidth]);
+
+  function handlePointerDown(event: PointerEvent<SVGSVGElement>) {
+    dragState.current = { startClientX: event.clientX, startFrom: viewRange.from, startTo: viewRange.to };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: PointerEvent<SVGSVGElement>) {
+    if (!dragState.current || !svgRef.current) {
+      return;
+    }
+    const rect = svgRef.current.getBoundingClientRect();
+    const dragSpan = dragState.current.startTo - dragState.current.startFrom;
+    const pixelDeltaX = event.clientX - dragState.current.startClientX;
+    const timeDeltaPerCssPixel = (dragSpan / plotWidth) * (width / rect.width);
+    let newFrom = dragState.current.startFrom - pixelDeltaX * timeDeltaPerCssPixel;
+    let newTo = newFrom + dragSpan;
+    if (newFrom < outerFrom) {
+      newFrom = outerFrom;
+      newTo = newFrom + dragSpan;
+    }
+    if (newTo > outerTo) {
+      newTo = outerTo;
+      newFrom = newTo - dragSpan;
+    }
+    setViewRange({ from: newFrom, to: newTo });
+  }
+
+  function handlePointerUp() {
+    dragState.current = null;
+  }
+
+  const isZoomed = viewRange.to - viewRange.from < outerSpan - 1000;
+  const rangeStart = viewRange.from;
+  const rangeEnd = viewRange.to;
+  const span = Math.max(1, rangeEnd - rangeStart);
+
+  const visiblePoints = points.filter((point) => point.timestamp >= rangeStart && point.timestamp <= rangeEnd);
+  const values = visiblePoints.map((point) => point.value);
+  const rawMin = values.length ? Math.min(...values) : 0;
+  const rawMax = values.length ? Math.max(...values) : 1;
+  const valuePadding = Math.max(0.5, (rawMax - rawMin) * 0.15);
+  const minValue = rawMin - valuePadding;
+  const maxValue = rawMax + valuePadding;
+  const valueSpan = Math.max(0.5, maxValue - minValue);
+
+  const xFor = (timestamp: number) => paddingLeft + ((timestamp - rangeStart) / span) * plotWidth;
+  const yFor = (value: number) => paddingTop + plotHeight - ((value - minValue) / valueSpan) * plotHeight;
+
+  const linePoints = visiblePoints.map((point) => `${xFor(point.timestamp).toFixed(1)},${yFor(point.value).toFixed(1)}`).join(" ");
+  const viewFromDate = new Date(rangeStart);
+  const viewToDate = new Date(rangeEnd);
+  const xTicks = buildWeightXTicks(viewFromDate, viewToDate);
+  const yTicks = buildWeightYTicks(minValue, maxValue);
+
+  return (
+    <div className="weightChartWrap">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        className="weightLineChart"
+        role="img"
+        aria-label="Prubeh hmotnosti"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+      >
+        {yTicks.map((tick, index) => (
+          <g key={index}>
+            <line x1={paddingLeft} y1={yFor(tick)} x2={width - paddingRight} y2={yFor(tick)} stroke="#eef1f5" />
+            <text x={paddingLeft - 8} y={yFor(tick)} textAnchor="end" dominantBaseline="middle" fontSize={11} fill="#617089">
+              {tick.toFixed(1)}
+            </text>
+          </g>
+        ))}
+        <line x1={paddingLeft} y1={paddingTop + plotHeight} x2={width - paddingRight} y2={paddingTop + plotHeight} stroke="#c7d0dc" />
+        {xTicks.map((tick, index) => (
+          <g key={index}>
+            <line x1={xFor(tick.timestamp)} y1={paddingTop + plotHeight} x2={xFor(tick.timestamp)} y2={paddingTop + plotHeight + 4} stroke="#c7d0dc" />
+            <text x={xFor(tick.timestamp)} y={height - 8} textAnchor="middle" fontSize={11} fill="#617089">
+              {tick.label}
+            </text>
+          </g>
+        ))}
+        {visiblePoints.length > 1 && <polyline points={linePoints} fill="none" stroke="#15616d" strokeWidth={2} />}
+        {visiblePoints.map((point) => (
+          <circle key={point.id} cx={xFor(point.timestamp)} cy={yFor(point.value)} r={3.5} fill="#15616d">
+            <title>{`${point.label}: ${point.value.toFixed(1)} kg`}</title>
+          </circle>
+        ))}
+        {!visiblePoints.length && (
+          <text x={paddingLeft + plotWidth / 2} y={paddingTop + plotHeight / 2} textAnchor="middle" fill="#617089" fontSize={14}>
+            Zadne zaznamy v tomto obdobi.
+          </text>
+        )}
+      </svg>
+      <div className="weightChartHint">
+        <span className="muted">Kolecko mysi = zoom, tazeni = posun.</span>
+        {isZoomed && (
+          <button type="button" className="secondary" onClick={() => setViewRange({ from: outerFrom, to: outerTo })}>
+            Zrusit zoom
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function quarterLabel(monthKey: string) {
   const [year, monthText] = monthKey.split("-");
   const quarter = Math.ceil(Number(monthText) / 3);
@@ -762,6 +1149,12 @@ export default function Home() {
   const [receiptPhotoPreview, setReceiptPhotoPreview] = useState<string | null>(null);
   const [dashboardPhotoPreview, setDashboardPhotoPreview] = useState<string | null>(null);
   const [isParsingFuelPhotos, setIsParsingFuelPhotos] = useState(false);
+  const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([]);
+  const [weightDraft, setWeightDraft] = useState<WeightDraft>(emptyWeightDraft);
+  const [weightStatsOpen, setWeightStatsOpen] = useState(false);
+  const [weightScale, setWeightScale] = useState<WeightScale>("week");
+  const [weightAnchor, setWeightAnchor] = useState(today());
+  const [isImportingWeight, setIsImportingWeight] = useState(false);
   const [overheadTickets, setOverheadTickets] = useState<OverheadTicket[]>([]);
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [statsDateFrom, setStatsDateFrom] = useState(defaultStatsDateFrom);
@@ -844,6 +1237,16 @@ export default function Home() {
     () => fuelVehicles.find((vehicle) => vehicle.id === selectedFuelVehicleId) ?? null,
     [fuelVehicles, selectedFuelVehicleId]
   );
+  const weightRange = useMemo(
+    () => weightRangeFor(weightScale, weightAnchor, weightEntries),
+    [weightScale, weightAnchor, weightEntries]
+  );
+  const weightSeries = useMemo(
+    () => buildWeightSeries(weightEntries, weightRange.from, weightRange.to),
+    [weightEntries, weightRange]
+  );
+  const latestWeightEntry = weightEntries[0] ?? null;
+  const previousWeightEntry = weightEntries[1] ?? null;
   const fuelDisplayRows = useMemo(() => buildFuelDisplayRows(fuelEntries), [fuelEntries]);
   const fuelConsumptionPoints = useMemo(() => buildFuelConsumptionPoints(fuelEntries), [fuelEntries]);
   const fuelConsumptionMax = useMemo(
@@ -987,6 +1390,78 @@ export default function Home() {
     setFuelEntries(await response.json());
   }
 
+  async function loadWeightEntries() {
+    const response = await apiFetch(`/weight/entries?${buildQuery({ limit: "5000" })}`);
+    setWeightEntries(await response.json());
+  }
+
+  async function saveWeightEntry(event: FormEvent) {
+    event.preventDefault();
+    if (!weightDraft.weight_kg) {
+      setMessage("Zadejte hmotnost.");
+      return;
+    }
+    const response = await apiFetch("/weight/entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        measured_on: weightDraft.measured_on,
+        measured_at: weightDraft.measured_at || null,
+        weight_kg: weightDraft.weight_kg,
+        body_fat_percent: weightDraft.body_fat_percent || null,
+        muscle_mass_kg: weightDraft.muscle_mass_kg || null,
+        note: weightDraft.note || null
+      })
+    });
+    if (!response.ok) {
+      setMessage("Zaznam hmotnosti se nepodarilo ulozit.");
+      return;
+    }
+    setMessage("Zaznam hmotnosti ulozen.");
+    setWeightDraft({ ...emptyWeightDraft, measured_on: weightDraft.measured_on });
+    await loadWeightEntries();
+  }
+
+  async function deleteWeightRow(row: WeightEntry) {
+    const confirmed = window.confirm(`Opravdu smazat zaznam hmotnosti ${row.measured_on} (${row.weight_kg} kg)?`);
+    if (!confirmed) {
+      return;
+    }
+    const response = await apiFetch(`/weight/entries/${row.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      setMessage("Zaznam hmotnosti se nepodarilo smazat.");
+      return;
+    }
+    setMessage("Zaznam hmotnosti smazan.");
+    await loadWeightEntries();
+  }
+
+  async function importWeightExport(file: File) {
+    const form = new FormData();
+    form.set("file", file);
+    setIsImportingWeight(true);
+    try {
+      const response = await apiFetch("/weight/imports/samsung-health", { method: "POST", body: form });
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch {
+        setMessage(`Import se nepodaril (server vratil neocekavanou odpoved, HTTP ${response.status}).`);
+        return;
+      }
+      if (!response.ok) {
+        setMessage(result?.detail || "Import se nepodaril.");
+        return;
+      }
+      setMessage(`Import dokoncen: ${result.imported_rows} novych zaznamu, ${result.skipped_rows} preskoceno.`);
+      await loadWeightEntries();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Import se nepodaril (chyba site).");
+    } finally {
+      setIsImportingWeight(false);
+    }
+  }
+
   async function loadCurrentUser() {
     const response = await apiFetch("/auth/me");
     const user = await response.json();
@@ -1017,6 +1492,7 @@ export default function Home() {
       loadOverheadTickets(),
       loadCategoryComparison(),
       loadFuelVehicles(),
+      loadWeightEntries(),
       loadProjects(),
       loadCategories()
     ];
@@ -2472,6 +2948,130 @@ export default function Home() {
                       <td className="rowActions">
                         <button className="iconButton secondary" disabled={!selectedFuelVehicle?.is_active} onClick={() => editFuelRow(row.entry)} title="Upravit PHM"><Edit3 size={16} /></button>
                         <button className="iconButton danger" disabled={!selectedFuelVehicle?.is_active} onClick={() => deleteFuelRow(row.entry)} title="Smazat PHM"><Trash2 size={16} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {section === "weight" && (
+          <section className="panel widePanel">
+            <div className="panelHeader">
+              <div>
+                <h2>Hmotnost</h2>
+                <p className="muted">Import dat ze Samsung Health a rucni zaznamy hmotnosti.</p>
+              </div>
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => setWeightStatsOpen((current) => !current)}>
+                  <BarChart3 size={18} /> {weightStatsOpen ? "Skryt graf" : "Graf vyvoje"}
+                </button>
+                <label className="secondary" style={{ cursor: isImportingWeight ? "wait" : "pointer" }}>
+                  <Upload size={18} /> {isImportingWeight ? "Importuji..." : "Import ze Samsung Health"}
+                  <input
+                    type="file"
+                    accept=".csv,.zip"
+                    style={{ display: "none" }}
+                    disabled={isImportingWeight}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (file) void importWeightExport(file);
+                    }}
+                  />
+                </label>
+                <Activity size={18} />
+              </div>
+            </div>
+
+            {latestWeightEntry && (
+              <div className="categoryCards">
+                <div className="categoryCard" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="muted">Posledni zaznam</span>
+                  <strong>{formatNumber(latestWeightEntry.weight_kg, 1)} kg</strong>
+                  <span className="muted">{latestWeightEntry.measured_on} {timeValue(latestWeightEntry.measured_at)}</span>
+                </div>
+                {previousWeightEntry && (
+                  <div className="categoryCard" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span className="muted">Zmena od predchoziho zaznamu</span>
+                    <strong>{(Number(latestWeightEntry.weight_kg) - Number(previousWeightEntry.weight_kg)).toFixed(1)} kg</strong>
+                    <span className="muted">{previousWeightEntry.measured_on}</span>
+                  </div>
+                )}
+                {latestWeightEntry.body_fat_percent && (
+                  <div className="categoryCard" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span className="muted">Podil tuku</span>
+                    <strong>{formatNumber(latestWeightEntry.body_fat_percent, 1)} %</strong>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {weightStatsOpen && (
+              <div className="chartPanel">
+                <div className="chartHeader">
+                  <div>
+                    <h3>Prubeh hmotnosti</h3>
+                    <p className="muted">{weightSeries.length} zaznamu v obdobi {formatWeightRangeLabel(weightScale, weightRange.from, weightRange.to)}.</p>
+                  </div>
+                  <div className="vehicleTabs">
+                    {(["week", "month", "year", "5y", "all"] as WeightScale[]).map((scale) => (
+                      <button
+                        key={scale}
+                        type="button"
+                        className={weightScale === scale ? "active" : ""}
+                        onClick={() => setWeightScale(scale)}
+                      >
+                        {WEIGHT_SCALE_LABELS[scale]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {weightScale !== "all" && (
+                  <div className="actions">
+                    <button type="button" className="secondary" onClick={() => setWeightAnchor((current) => shiftWeightAnchor(weightScale, current, -1))}>&larr; Predchozi</button>
+                    <button type="button" className="secondary" onClick={() => setWeightAnchor(today())}>Dnes</button>
+                    <button type="button" className="secondary" onClick={() => setWeightAnchor((current) => shiftWeightAnchor(weightScale, current, 1))}>Dalsi &rarr;</button>
+                  </div>
+                )}
+                <WeightLineChart points={weightSeries} from={weightRange.from} to={weightRange.to} />
+              </div>
+            )}
+
+            <form className="gridForm" onSubmit={saveWeightEntry}>
+              <label>Datum<input type="date" value={weightDraft.measured_on} onChange={(e) => setWeightDraft({ ...weightDraft, measured_on: e.target.value })} /></label>
+              <label>Cas<input type="time" value={weightDraft.measured_at} onChange={(e) => setWeightDraft({ ...weightDraft, measured_at: e.target.value })} /></label>
+              <label>Hmotnost (kg)<input type="number" step="0.1" value={weightDraft.weight_kg} onChange={(e) => setWeightDraft({ ...weightDraft, weight_kg: e.target.value })} /></label>
+              <label>Tuk (%)<input type="number" step="0.1" value={weightDraft.body_fat_percent} onChange={(e) => setWeightDraft({ ...weightDraft, body_fat_percent: e.target.value })} /></label>
+              <label>Svaly (kg)<input type="number" step="0.1" value={weightDraft.muscle_mass_kg} onChange={(e) => setWeightDraft({ ...weightDraft, muscle_mass_kg: e.target.value })} /></label>
+              <label>Poznamka<input value={weightDraft.note} onChange={(e) => setWeightDraft({ ...weightDraft, note: e.target.value })} /></label>
+              <div className="actions">
+                <button type="submit"><Save size={18} /> Pridat zaznam</button>
+              </div>
+            </form>
+
+            <div className="tableWrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Datum</th><th>Cas</th><th className="num">Hmotnost</th><th className="num">Tuk %</th><th className="num">Svaly</th><th className="num">BMI</th><th>Poznamka</th><th>Zdroj</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {weightEntries.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>{entry.measured_on}</td>
+                      <td>{timeValue(entry.measured_at)}</td>
+                      <td className="num">{formatNumber(entry.weight_kg, 1)}</td>
+                      <td className="num">{formatNumber(entry.body_fat_percent, 1)}</td>
+                      <td className="num">{formatNumber(entry.muscle_mass_kg, 1)}</td>
+                      <td className="num">{formatNumber(computeBmi(entry.weight_kg, entry.height_cm), 1)}</td>
+                      <td>{entry.note}</td>
+                      <td>{entry.source === "samsung_health" ? "Samsung Health" : "Rucne"}</td>
+                      <td className="rowActions">
+                        <button className="iconButton danger" onClick={() => deleteWeightRow(entry)} title="Smazat zaznam"><Trash2 size={16} /></button>
                       </td>
                     </tr>
                   ))}

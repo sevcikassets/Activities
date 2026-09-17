@@ -412,6 +412,57 @@ def _average_consumption(liters: Decimal, trip_km: Decimal) -> Decimal | None:
     return Decimal(str(round(float(liters) / float(trip_km) * 100, 2)))
 
 
+def ensure_weight_schema(db: Session) -> None:
+    Base = models.WeightEntry.metadata
+    Base.create_all(db.get_bind(), tables=[models.WeightEntry.__table__])
+    db.execute(text("CREATE INDEX IF NOT EXISTS idx_weight_entries_measured ON weight_entries(measured_on, measured_at)"))
+    db.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_weight_entries_source_uuid "
+            "ON weight_entries(source_uuid) WHERE source_uuid IS NOT NULL"
+        )
+    )
+    db.commit()
+
+
+def list_weight_entries(db: Session, date_from: date | None = None, date_to: date | None = None, limit: int = 5000):
+    stmt = (
+        select(models.WeightEntry)
+        .order_by(models.WeightEntry.measured_on.desc(), models.WeightEntry.measured_at.desc().nullslast())
+        .limit(min(limit, 20000))
+    )
+    if date_from:
+        stmt = stmt.where(models.WeightEntry.measured_on >= date_from)
+    if date_to:
+        stmt = stmt.where(models.WeightEntry.measured_on <= date_to)
+    return db.scalars(stmt).all()
+
+
+def create_weight_entry(db: Session, payload) -> models.WeightEntry:
+    entry = models.WeightEntry(
+        measured_on=payload.measured_on,
+        measured_at=payload.measured_at,
+        weight_kg=payload.weight_kg,
+        body_fat_percent=payload.body_fat_percent,
+        muscle_mass_kg=payload.muscle_mass_kg,
+        note=payload.note,
+        source="manual",
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def delete_weight_entry(db: Session, entry_id) -> bool:
+    entry = db.scalar(select(models.WeightEntry).where(models.WeightEntry.id == entry_id))
+    if not entry:
+        return False
+    db.delete(entry)
+    db.commit()
+    return True
+
+
 def import_fuel_workbook(db: Session, workbook_path) -> dict:
     import xlrd
 
