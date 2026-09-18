@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BarChart3, Briefcase, CheckSquare, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Upload, Users, X } from "lucide-react";
+import { Activity, BarChart3, Briefcase, CheckSquare, ChevronDown, ChevronRight, Copy, Download, Edit3, Fuel, ListFilter, LogOut, Menu, Mic, PanelLeftClose, PanelLeftOpen, RefreshCw, Save, Search, Table2, Ticket, Trash2, Upload, Users, X } from "lucide-react";
 import { Fragment, FormEvent, KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -822,6 +822,73 @@ function buildWeightSeries(entries: WeightEntry[], from: Date, to: Date): Weight
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
+type WeightMonthlySummaryRow = {
+  key: string;
+  label: string;
+  count: number;
+  lastWeight: string;
+  lastMeasuredOn: string;
+};
+
+function buildWeightMonthlySummary(entries: WeightEntry[]): WeightMonthlySummaryRow[] {
+  const months = new Map<string, { count: number; last: WeightEntry }>();
+  for (const entry of entries) {
+    const key = entry.measured_on.slice(0, 7);
+    const existing = months.get(key);
+    if (!existing) {
+      months.set(key, { count: 1, last: entry });
+      continue;
+    }
+    existing.count += 1;
+    const existingTimestamp = `${existing.last.measured_on}T${existing.last.measured_at ?? "00:00:00"}`;
+    const entryTimestamp = `${entry.measured_on}T${entry.measured_at ?? "00:00:00"}`;
+    if (entryTimestamp > existingTimestamp) {
+      existing.last = entry;
+    }
+  }
+  return [...months.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([key, value]) => ({
+      key,
+      label: new Date(`${key}-01T00:00:00`).toLocaleDateString("cs-CZ", { month: "long", year: "numeric" }),
+      count: value.count,
+      lastWeight: value.last.weight_kg,
+      lastMeasuredOn: value.last.measured_on
+    }));
+}
+
+type WeightYearlySummaryRow = {
+  key: string;
+  label: string;
+  count: number;
+  lastWeight: string;
+  lastMeasuredOn: string;
+  months: WeightMonthlySummaryRow[];
+};
+
+function buildWeightYearlySummary(entries: WeightEntry[]): WeightYearlySummaryRow[] {
+  const monthly = buildWeightMonthlySummary(entries);
+  const years = new Map<string, WeightYearlySummaryRow>();
+  for (const month of monthly) {
+    const yearKey = month.key.slice(0, 4);
+    const existing = years.get(yearKey);
+    if (!existing) {
+      years.set(yearKey, {
+        key: yearKey,
+        label: yearKey,
+        count: month.count,
+        lastWeight: month.lastWeight,
+        lastMeasuredOn: month.lastMeasuredOn,
+        months: [month]
+      });
+      continue;
+    }
+    existing.count += month.count;
+    existing.months.push(month);
+  }
+  return [...years.values()].sort((left, right) => right.key.localeCompare(left.key));
+}
+
 const MONTH_SHORT_LABELS = ["Led", "Uno", "Bre", "Dub", "Kve", "Cvn", "Cvc", "Srp", "Zar", "Rij", "Lis", "Pro"];
 
 type WeightAxisTick = { timestamp: number; label: string };
@@ -1151,6 +1218,9 @@ export default function Home() {
   const [isParsingFuelPhotos, setIsParsingFuelPhotos] = useState(false);
   const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([]);
   const [weightDraft, setWeightDraft] = useState<WeightDraft>(emptyWeightDraft);
+  const [editingWeightEntryId, setEditingWeightEntryId] = useState<string | null>(null);
+  const [weightMonthlyOpen, setWeightMonthlyOpen] = useState(false);
+  const [expandedWeightYears, setExpandedWeightYears] = useState<Set<string>>(new Set());
   const [weightStatsOpen, setWeightStatsOpen] = useState(false);
   const [weightScale, setWeightScale] = useState<WeightScale>("week");
   const [weightAnchor, setWeightAnchor] = useState(today());
@@ -1245,6 +1315,7 @@ export default function Home() {
     () => buildWeightSeries(weightEntries, weightRange.from, weightRange.to),
     [weightEntries, weightRange]
   );
+  const weightYearlySummary = useMemo(() => buildWeightYearlySummary(weightEntries), [weightEntries]);
   const latestWeightEntry = weightEntries[0] ?? null;
   const previousWeightEntry = weightEntries[1] ?? null;
   const weightAlertLevel = useMemo<"none" | "warn" | "urgent">(() => {
@@ -1415,25 +1486,56 @@ export default function Home() {
       setMessage("Zadejte hmotnost.");
       return;
     }
-    const response = await apiFetch("/weight/entries", {
-      method: "POST",
+    const payload = {
+      measured_on: weightDraft.measured_on,
+      measured_at: weightDraft.measured_at || null,
+      weight_kg: weightDraft.weight_kg,
+      body_fat_percent: weightDraft.body_fat_percent || null,
+      muscle_mass_kg: weightDraft.muscle_mass_kg || null,
+      note: weightDraft.note || null
+    };
+    const response = await apiFetch(editingWeightEntryId ? `/weight/entries/${editingWeightEntryId}` : "/weight/entries", {
+      method: editingWeightEntryId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        measured_on: weightDraft.measured_on,
-        measured_at: weightDraft.measured_at || null,
-        weight_kg: weightDraft.weight_kg,
-        body_fat_percent: weightDraft.body_fat_percent || null,
-        muscle_mass_kg: weightDraft.muscle_mass_kg || null,
-        note: weightDraft.note || null
-      })
+      body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      setMessage("Zaznam hmotnosti se nepodarilo ulozit.");
+      setMessage(editingWeightEntryId ? "Zaznam hmotnosti se nepodarilo upravit." : "Zaznam hmotnosti se nepodarilo ulozit.");
       return;
     }
-    setMessage("Zaznam hmotnosti ulozen.");
+    setMessage(editingWeightEntryId ? "Zaznam hmotnosti upraven." : "Zaznam hmotnosti ulozen.");
+    setEditingWeightEntryId(null);
     setWeightDraft({ ...emptyWeightDraft, measured_on: weightDraft.measured_on });
     await loadWeightEntries();
+  }
+
+  function editWeightRow(row: WeightEntry) {
+    setEditingWeightEntryId(row.id);
+    setWeightDraft({
+      measured_on: row.measured_on,
+      measured_at: row.measured_at ? row.measured_at.slice(0, 5) : "",
+      weight_kg: row.weight_kg,
+      body_fat_percent: row.body_fat_percent ?? "",
+      muscle_mass_kg: row.muscle_mass_kg ?? "",
+      note: row.note ?? ""
+    });
+  }
+
+  function cancelWeightEdit() {
+    setEditingWeightEntryId(null);
+    setWeightDraft({ ...emptyWeightDraft, measured_on: weightDraft.measured_on });
+  }
+
+  function toggleWeightYear(year: string) {
+    setExpandedWeightYears((current) => {
+      const next = new Set(current);
+      if (next.has(year)) {
+        next.delete(year);
+      } else {
+        next.add(year);
+      }
+      return next;
+    });
   }
 
   async function deleteWeightRow(row: WeightEntry) {
@@ -1445,6 +1547,9 @@ export default function Home() {
     if (!response.ok) {
       setMessage("Zaznam hmotnosti se nepodarilo smazat.");
       return;
+    }
+    if (editingWeightEntryId === row.id) {
+      cancelWeightEdit();
     }
     setMessage("Zaznam hmotnosti smazan.");
     await loadWeightEntries();
@@ -2991,6 +3096,9 @@ export default function Home() {
                 <button type="button" className="secondary" onClick={() => setWeightStatsOpen((current) => !current)}>
                   <BarChart3 size={18} /> {weightStatsOpen ? "Skryt graf" : "Graf vyvoje"}
                 </button>
+                <button type="button" className="secondary" onClick={() => setWeightMonthlyOpen((current) => !current)}>
+                  <Table2 size={18} /> {weightMonthlyOpen ? "Skryt mesicni prehled" : "Mesicni prehled"}
+                </button>
                 {!weightEntries.length && (
                   <label className="secondary" style={{ cursor: isImportingWeight ? "wait" : "pointer" }}>
                     <Upload size={18} /> {isImportingWeight ? "Importuji..." : "Import ze Samsung Health"}
@@ -3065,6 +3173,43 @@ export default function Home() {
               </div>
             )}
 
+            {weightMonthlyOpen && (
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th></th><th>Obdobi</th><th className="num">Pocet vazeni</th><th className="num">Posledni hmotnost</th><th>Datum posledniho vazeni</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weightYearlySummary.map((year) => {
+                      const expanded = expandedWeightYears.has(year.key);
+                      return (
+                        <Fragment key={year.key}>
+                          <tr className="subtotalRow" style={{ cursor: "pointer" }} onClick={() => toggleWeightYear(year.key)}>
+                            <td>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</td>
+                            <td>{year.label}</td>
+                            <td className="num">{year.count}</td>
+                            <td className="num">{formatNumber(year.lastWeight, 1)} kg</td>
+                            <td>{year.lastMeasuredOn}</td>
+                          </tr>
+                          {expanded && year.months.map((month) => (
+                            <tr key={month.key}>
+                              <td></td>
+                              <td className="weightMonthCell">{month.label}</td>
+                              <td className="num">{month.count}</td>
+                              <td className="num">{formatNumber(month.lastWeight, 1)} kg</td>
+                              <td>{month.lastMeasuredOn}</td>
+                            </tr>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
             <form className="gridForm" onSubmit={saveWeightEntry}>
               <label>Datum<input type="date" value={weightDraft.measured_on} onChange={(e) => setWeightDraft({ ...weightDraft, measured_on: e.target.value })} /></label>
               <label>Cas<input type="time" value={weightDraft.measured_at} onChange={(e) => setWeightDraft({ ...weightDraft, measured_at: e.target.value })} /></label>
@@ -3073,7 +3218,8 @@ export default function Home() {
               <label>Svaly (kg)<input type="number" step="0.1" value={weightDraft.muscle_mass_kg} onChange={(e) => setWeightDraft({ ...weightDraft, muscle_mass_kg: e.target.value })} /></label>
               <label>Poznamka<input value={weightDraft.note} onChange={(e) => setWeightDraft({ ...weightDraft, note: e.target.value })} /></label>
               <div className="actions">
-                <button type="submit"><Save size={18} /> Pridat zaznam</button>
+                <button type="submit"><Save size={18} /> {editingWeightEntryId ? "Ulozit zmeny" : "Pridat zaznam"}</button>
+                {editingWeightEntryId && <button type="button" className="secondary" onClick={cancelWeightEdit}><X size={18} /> Zrusit</button>}
               </div>
             </form>
 
@@ -3096,6 +3242,7 @@ export default function Home() {
                       <td>{entry.note}</td>
                       <td>{entry.source === "samsung_health" ? "Samsung Health" : "Rucne"}</td>
                       <td className="rowActions">
+                        <button className="iconButton secondary" onClick={() => editWeightRow(entry)} title="Upravit zaznam"><Edit3 size={16} /></button>
                         <button className="iconButton danger" onClick={() => deleteWeightRow(entry)} title="Smazat zaznam"><Trash2 size={16} /></button>
                       </td>
                     </tr>

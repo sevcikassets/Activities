@@ -454,6 +454,22 @@ def create_weight_entry(db: Session, payload) -> models.WeightEntry:
     return entry
 
 
+def update_weight_entry(db: Session, entry_id, payload) -> models.WeightEntry | None:
+    entry = db.scalar(select(models.WeightEntry).where(models.WeightEntry.id == entry_id))
+    if not entry:
+        return None
+    entry.measured_on = payload.measured_on
+    entry.measured_at = payload.measured_at
+    entry.weight_kg = payload.weight_kg
+    entry.body_fat_percent = payload.body_fat_percent
+    entry.muscle_mass_kg = payload.muscle_mass_kg
+    entry.note = payload.note
+    entry.updated_at = datetime.now()
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
 def delete_weight_entry(db: Session, entry_id) -> bool:
     entry = db.scalar(select(models.WeightEntry).where(models.WeightEntry.id == entry_id))
     if not entry:

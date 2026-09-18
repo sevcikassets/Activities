@@ -886,6 +886,10 @@ h3 {
   border-top: 1px solid #c9e1e6;
 }
 
+.weightMonthCell {
+  padding-left: 28px;
+}
+
 .statsDrilldown tbody tr {
   cursor: pointer;
 }

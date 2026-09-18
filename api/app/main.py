@@ -57,6 +57,7 @@ from app.repository import (
     update_fuel_entry,
     update_project,
     update_time_entry,
+    update_weight_entry,
     update_overhead_ticket_validity,
 )
 from app.schemas import (
@@ -934,6 +935,19 @@ def add_weight_entry(
     _user: AuthUser = Depends(require_editor),
 ) -> WeightEntryOut:
     return serialize_weight_entry(create_weight_entry(db, payload))
+
+
+@app.put("/weight/entries/{entry_id}", response_model=WeightEntryOut)
+def edit_weight_entry(
+    entry_id: UUID,
+    payload: WeightEntryCreate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_editor),
+) -> WeightEntryOut:
+    entry = update_weight_entry(db, entry_id, payload)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weight entry not found.")
+    return serialize_weight_entry(entry)
 
 
 @app.delete("/weight/entries/{entry_id}")
