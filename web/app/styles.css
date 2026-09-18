@@ -150,6 +150,34 @@ button, input, textarea, select {
   background: transparent;
   color: #334155;
   justify-content: flex-start;
+  position: relative;
+}
+
+.navBadge {
+  align-items: center;
+  background: #d64545;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 700;
+  height: 15px;
+  justify-content: center;
+  line-height: 1;
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 15px;
+}
+
+.navBadge.navBadgeBlink {
+  animation: navBadgeBlink 1s step-start infinite;
+}
+
+@keyframes navBadgeBlink {
+  50% {
+    opacity: 0.15;
+  }
 }
 
 .sideNav button.active {

@@ -1247,6 +1247,20 @@ export default function Home() {
   );
   const latestWeightEntry = weightEntries[0] ?? null;
   const previousWeightEntry = weightEntries[1] ?? null;
+  const weightAlertLevel = useMemo<"none" | "warn" | "urgent">(() => {
+    if (!latestWeightEntry) {
+      return "urgent";
+    }
+    const lastTimestamp = new Date(`${latestWeightEntry.measured_on}T${latestWeightEntry.measured_at ?? "00:00:00"}`).getTime();
+    const daysSince = (Date.now() - lastTimestamp) / (24 * 60 * 60 * 1000);
+    if (daysSince >= 14) {
+      return "urgent";
+    }
+    if (daysSince >= 7) {
+      return "warn";
+    }
+    return "none";
+  }, [latestWeightEntry]);
   const fuelDisplayRows = useMemo(() => buildFuelDisplayRows(fuelEntries), [fuelEntries]);
   const fuelConsumptionPoints = useMemo(() => buildFuelConsumptionPoints(fuelEntries), [fuelEntries]);
   const fuelConsumptionMax = useMemo(
@@ -2413,9 +2427,18 @@ export default function Home() {
         <nav className="sideNav" aria-label="Sekce aplikace">
           {visibleSections.map((item) => {
             const Icon = item.icon;
+            const showWeightAlert = item.id === "weight" && weightAlertLevel !== "none";
             return (
               <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => switchSection(item.id)} title={item.label}>
                 <Icon size={18} /> <span className="navLabel">{item.label}</span>
+                {showWeightAlert && (
+                  <span
+                    className={`navBadge ${weightAlertLevel === "urgent" ? "navBadgeBlink" : ""}`}
+                    title={weightAlertLevel === "urgent" ? "Hmotnost nezadana vice nez 14 dni" : "Hmotnost nezadana vice nez 7 dni"}
+                  >
+                    !
+                  </span>
+                )}
               </button>
             );
           })}
@@ -2968,20 +2991,22 @@ export default function Home() {
                 <button type="button" className="secondary" onClick={() => setWeightStatsOpen((current) => !current)}>
                   <BarChart3 size={18} /> {weightStatsOpen ? "Skryt graf" : "Graf vyvoje"}
                 </button>
-                <label className="secondary" style={{ cursor: isImportingWeight ? "wait" : "pointer" }}>
-                  <Upload size={18} /> {isImportingWeight ? "Importuji..." : "Import ze Samsung Health"}
-                  <input
-                    type="file"
-                    accept=".csv,.zip"
-                    style={{ display: "none" }}
-                    disabled={isImportingWeight}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = "";
-                      if (file) void importWeightExport(file);
-                    }}
-                  />
-                </label>
+                {!weightEntries.length && (
+                  <label className="secondary" style={{ cursor: isImportingWeight ? "wait" : "pointer" }}>
+                    <Upload size={18} /> {isImportingWeight ? "Importuji..." : "Import ze Samsung Health"}
+                    <input
+                      type="file"
+                      accept=".csv,.zip"
+                      style={{ display: "none" }}
+                      disabled={isImportingWeight}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (file) void importWeightExport(file);
+                      }}
+                    />
+                  </label>
+                )}
                 <Activity size={18} />
               </div>
             </div>
