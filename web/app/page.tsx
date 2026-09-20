@@ -202,6 +202,7 @@ type WeightSeriesPoint = {
   timestamp: number;
   label: string;
   value: number;
+  calculated: boolean;
 };
 
 type OverheadTicket = {
@@ -805,9 +806,7 @@ function formatWeightRangeLabel(scale: WeightScale, from: Date, to: Date): strin
   return `${from.getFullYear()} - ${to.getFullYear()}`;
 }
 
-function buildWeightSeries(entries: WeightEntry[], from: Date, to: Date): WeightSeriesPoint[] {
-  const fromMs = from.getTime();
-  const toMs = to.getTime();
+function buildRealWeightPoints(entries: WeightEntry[]): WeightSeriesPoint[] {
   return entries
     .map((entry) => {
       const timestamp = new Date(`${entry.measured_on}T${entry.measured_at ?? "12:00:00"}`).getTime();
@@ -815,11 +814,57 @@ function buildWeightSeries(entries: WeightEntry[], from: Date, to: Date): Weight
         id: entry.id,
         timestamp,
         label: `${entry.measured_on} ${timeValue(entry.measured_at)}`.trim(),
-        value: Number(entry.weight_kg)
+        value: Number(entry.weight_kg),
+        calculated: false
       };
     })
-    .filter((point) => point.timestamp >= fromMs && point.timestamp <= toMs)
     .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function monthBoundariesBetween(fromMs: number, toMs: number): number[] {
+  const boundaries: number[] = [];
+  const from = new Date(fromMs);
+  let endOfMonth = new Date(from.getFullYear(), from.getMonth() + 1, 0, 23, 59, 59, 999);
+  while (endOfMonth.getTime() < toMs) {
+    boundaries.push(endOfMonth.getTime());
+    const startOfNextMonth = new Date(endOfMonth.getFullYear(), endOfMonth.getMonth() + 1, 1);
+    if (startOfNextMonth.getTime() >= toMs) {
+      break;
+    }
+    boundaries.push(startOfNextMonth.getTime());
+    endOfMonth = new Date(startOfNextMonth.getFullYear(), startOfNextMonth.getMonth() + 1, 0, 23, 59, 59, 999);
+  }
+  return boundaries;
+}
+
+function fillWeightGaps(realPoints: WeightSeriesPoint[]): WeightSeriesPoint[] {
+  const filled: WeightSeriesPoint[] = [];
+  for (let index = 0; index < realPoints.length; index += 1) {
+    const point = realPoints[index];
+    filled.push(point);
+    const next = realPoints[index + 1];
+    if (!next) {
+      continue;
+    }
+    for (const boundaryTimestamp of monthBoundariesBetween(point.timestamp, next.timestamp)) {
+      const ratio = (boundaryTimestamp - point.timestamp) / (next.timestamp - point.timestamp);
+      filled.push({
+        id: `calc-${boundaryTimestamp}`,
+        timestamp: boundaryTimestamp,
+        label: `${new Date(boundaryTimestamp).toLocaleDateString("cs-CZ")} (vypocteno)`,
+        value: point.value + (next.value - point.value) * ratio,
+        calculated: true
+      });
+    }
+  }
+  return filled;
+}
+
+function buildWeightSeries(entries: WeightEntry[], from: Date, to: Date): WeightSeriesPoint[] {
+  const fullSeries = fillWeightGaps(buildRealWeightPoints(entries));
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+  return fullSeries.filter((point) => point.timestamp >= fromMs && point.timestamp <= toMs);
 }
 
 type WeightMonthlySummaryRow = {
@@ -1096,11 +1141,17 @@ function WeightLineChart({ points, from, to }: { points: WeightSeriesPoint[]; fr
           </g>
         ))}
         {visiblePoints.length > 1 && <polyline points={linePoints} fill="none" stroke="#15616d" strokeWidth={2} />}
-        {visiblePoints.map((point) => (
-          <circle key={point.id} cx={xFor(point.timestamp)} cy={yFor(point.value)} r={3.5} fill="#15616d">
-            <title>{`${point.label}: ${point.value.toFixed(1)} kg`}</title>
-          </circle>
-        ))}
+        {visiblePoints.map((point) =>
+          point.calculated ? (
+            <circle key={point.id} cx={xFor(point.timestamp)} cy={yFor(point.value)} r={2.5} fill="#ffffff" stroke="#8fa6ab" strokeWidth={1.5}>
+              <title>{`${point.label}: ${point.value.toFixed(1)} kg`}</title>
+            </circle>
+          ) : (
+            <circle key={point.id} cx={xFor(point.timestamp)} cy={yFor(point.value)} r={3.5} fill="#15616d">
+              <title>{`${point.label}: ${point.value.toFixed(1)} kg`}</title>
+            </circle>
+          )
+        )}
         {!visiblePoints.length && (
           <text x={paddingLeft + plotWidth / 2} y={paddingTop + plotHeight / 2} textAnchor="middle" fill="#617089" fontSize={14}>
             Zadne zaznamy v tomto obdobi.
@@ -1108,7 +1159,7 @@ function WeightLineChart({ points, from, to }: { points: WeightSeriesPoint[]; fr
         )}
       </svg>
       <div className="weightChartHint">
-        <span className="muted">Kolecko mysi = zoom, tazeni = posun.</span>
+        <span className="muted">Kolecko mysi = zoom, tazeni = posun. Prazdne kolecko = dopoctena hodnota mezi zaznamy.</span>
         {isZoomed && (
           <button type="button" className="secondary" onClick={() => setViewRange({ from: outerFrom, to: outerTo })}>
             Zrusit zoom
