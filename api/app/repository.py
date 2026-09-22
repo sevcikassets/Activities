@@ -143,7 +143,11 @@ def seed_fuel_vehicles(db: Session) -> None:
 
 
 def list_fuel_vehicles(db: Session):
-    return db.scalars(select(models.FuelVehicle).order_by(models.FuelVehicle.sort_order, models.FuelVehicle.name)).all()
+    return db.scalars(
+        select(models.FuelVehicle).order_by(
+            models.FuelVehicle.is_active.desc(), models.FuelVehicle.sort_order, models.FuelVehicle.name
+        )
+    ).all()
 
 
 def get_fuel_vehicle(db: Session, vehicle_id):
