@@ -82,6 +82,9 @@ def normalize_time_entry_descriptions(db: Session) -> int:
 def ensure_fuel_schema(db: Session) -> None:
     Base = models.FuelVehicle.metadata
     Base.create_all(db.get_bind(), tables=[models.FuelVehicle.__table__, models.FuelEntry.__table__])
+    db.execute(text("ALTER TABLE fuel_vehicles ADD COLUMN IF NOT EXISTS vehicle_type text"))
+    db.execute(text("ALTER TABLE fuel_vehicles ADD COLUMN IF NOT EXISTS license_plate text"))
+    db.execute(text("ALTER TABLE fuel_vehicles ADD COLUMN IF NOT EXISTS initial_odometer_km numeric(12, 2)"))
     db.execute(text("CREATE INDEX IF NOT EXISTS idx_fuel_entries_vehicle_date ON fuel_entries(vehicle_id, purchased_on)"))
     db.execute(
         text(
@@ -145,6 +148,55 @@ def list_fuel_vehicles(db: Session):
 
 def get_fuel_vehicle(db: Session, vehicle_id):
     return db.scalar(select(models.FuelVehicle).where(models.FuelVehicle.id == vehicle_id))
+
+
+def _unique_vehicle_code(db: Session, name: str) -> str:
+    base = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", normalize_name(name))).strip("-") or "vozidlo"
+    code = base
+    suffix = 2
+    while db.scalar(select(models.FuelVehicle).where(models.FuelVehicle.code == code)):
+        code = f"{base}-{suffix}"
+        suffix += 1
+    return code
+
+
+def create_fuel_vehicle(db: Session, payload) -> models.FuelVehicle:
+    existing = db.scalar(select(models.FuelVehicle).where(models.FuelVehicle.name == payload.name))
+    if existing:
+        raise ValueError("Vozidlo s timto nazvem jiz existuje.")
+    max_sort_order = db.scalar(select(func.max(models.FuelVehicle.sort_order))) or 0
+    vehicle = models.FuelVehicle(
+        code=_unique_vehicle_code(db, payload.name),
+        name=payload.name,
+        vehicle_type=payload.vehicle_type,
+        license_plate=payload.license_plate,
+        initial_odometer_km=payload.initial_odometer_km,
+        is_active=payload.is_active,
+        sort_order=max_sort_order + 1,
+    )
+    db.add(vehicle)
+    db.commit()
+    db.refresh(vehicle)
+    return vehicle
+
+
+def update_fuel_vehicle(db: Session, vehicle_id, payload) -> models.FuelVehicle | None:
+    vehicle = get_fuel_vehicle(db, vehicle_id)
+    if not vehicle:
+        return None
+    changed_fields = payload.model_fields_set
+    if "name" in changed_fields and payload.name is not None and payload.name != vehicle.name:
+        duplicate = db.scalar(select(models.FuelVehicle).where(models.FuelVehicle.name == payload.name))
+        if duplicate and duplicate.id != vehicle.id:
+            raise ValueError("Vozidlo s timto nazvem jiz existuje.")
+        vehicle.name = payload.name
+    for field in ["vehicle_type", "license_plate", "initial_odometer_km", "is_active"]:
+        if field in changed_fields:
+            setattr(vehicle, field, getattr(payload, field))
+    db.commit()
+    recalculate_fuel_vehicle(db, vehicle.id)
+    db.refresh(vehicle)
+    return vehicle
 
 
 def list_fuel_entries(db: Session, vehicle_id=None, date_from: date | None = None, date_to: date | None = None, limit: int = 1000):
@@ -276,8 +328,9 @@ def _fuel_payload_with_calculations(db: Session, vehicle_id, payload) -> dict:
         values["price_per_liter"] = _round_decimal(values["total_price_vat"] / values["liters"])
     if values["trip_km"] is None and values["odometer_km"]:
         previous = _previous_fuel_entry(db, vehicle_id, values["purchased_on"], values["purchased_at"])
-        if previous and previous.odometer_km and values["odometer_km"] > previous.odometer_km:
-            values["trip_km"] = values["odometer_km"] - previous.odometer_km
+        baseline = _baseline_odometer(db, vehicle_id, previous)
+        if baseline and values["odometer_km"] > baseline:
+            values["trip_km"] = values["odometer_km"] - baseline
     if values["full_tank"] is not True:
         values["average_consumption"] = None
     elif values["average_consumption"] is None and values["liters"] and values["trip_km"]:
@@ -292,8 +345,9 @@ def _apply_fuel_entry_calculations(db: Session, entry: models.FuelEntry) -> None
         entry.price_per_liter = _round_decimal(entry.total_price_vat / entry.liters)
     if entry.trip_km is None and entry.odometer_km:
         previous = _previous_fuel_entry(db, entry.vehicle_id, entry.purchased_on, entry.purchased_at, entry.id)
-        if previous and previous.odometer_km and entry.odometer_km > previous.odometer_km:
-            entry.trip_km = entry.odometer_km - previous.odometer_km
+        baseline = _baseline_odometer(db, entry.vehicle_id, previous)
+        if baseline and entry.odometer_km > baseline:
+            entry.trip_km = entry.odometer_km - baseline
     if entry.full_tank is not True:
         entry.average_consumption = None
 
@@ -320,13 +374,21 @@ def _previous_fuel_entry(db: Session, vehicle_id, purchased_on: date, purchased_
     return db.scalar(stmt)
 
 
+def _baseline_odometer(db: Session, vehicle_id, previous: "models.FuelEntry | None") -> Decimal | None:
+    if previous:
+        return previous.odometer_km
+    vehicle = get_fuel_vehicle(db, vehicle_id)
+    return vehicle.initial_odometer_km if vehicle else None
+
+
 def recalculate_fuel_vehicle(db: Session, vehicle_id) -> None:
+    vehicle = get_fuel_vehicle(db, vehicle_id)
     rows = db.scalars(
         select(models.FuelEntry)
         .where(models.FuelEntry.vehicle_id == vehicle_id)
         .order_by(models.FuelEntry.purchased_on, models.FuelEntry.purchased_at.nullsfirst(), models.FuelEntry.created_at)
     ).all()
-    previous_odometer = None
+    previous_odometer = vehicle.initial_odometer_km if vehicle else None
     previous_full_odometer = None
     liters_since_full = Decimal("0")
     for entry in rows:
@@ -363,14 +425,6 @@ def _round_decimal(value: Decimal, places: str = "0.01") -> Decimal:
 def fuel_summary(db: Session, vehicle_id=None):
     rows = list_fuel_entries(db, vehicle_id, limit=10000)
 
-    earliest_per_vehicle: dict = {}
-    for entry in rows:
-        entry_key = (entry.purchased_on, entry.purchased_at or time(0, 0, 0))
-        current = earliest_per_vehicle.get(entry.vehicle_id)
-        if current is None or entry_key < current[0]:
-            earliest_per_vehicle[entry.vehicle_id] = (entry_key, entry.id)
-    first_entry_ids = {value[1] for value in earliest_per_vehicle.values()}
-
     monthly: dict[str, dict] = {}
     yearly: dict[str, dict] = {}
 
@@ -391,7 +445,7 @@ def fuel_summary(db: Session, vehicle_id=None):
         item["trip_km"] += entry.trip_km or Decimal("0")
 
     for entry in rows:
-        if entry.id in first_entry_ids:
+        if entry.trip_km is None:
             continue
         month_key = entry.purchased_on.strftime("%Y-%m")
         year_key = str(entry.purchased_on.year)

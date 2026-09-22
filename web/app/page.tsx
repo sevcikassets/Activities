@@ -111,8 +111,19 @@ type FuelVehicle = {
   id: string;
   code: string;
   name: string;
+  vehicle_type: string | null;
+  license_plate: string | null;
+  initial_odometer_km: string | null;
   is_active: boolean;
   sort_order: number;
+};
+
+type FuelVehicleDraft = {
+  name: string;
+  vehicle_type: string;
+  license_plate: string;
+  initial_odometer_km: string;
+  is_active: boolean;
 };
 
 type FuelEntry = {
@@ -301,6 +312,14 @@ const emptyFuelDraft: FuelDraft = {
   full_tank: "true",
   average_consumption: "",
   note: ""
+};
+
+const emptyFuelVehicleDraft: FuelVehicleDraft = {
+  name: "",
+  vehicle_type: "",
+  license_plate: "",
+  initial_odometer_km: "",
+  is_active: true
 };
 
 const WEIGHT_SCALE_LABELS: Record<WeightScale, string> = {
@@ -1258,6 +1277,9 @@ export default function Home() {
   const [selectedPeriodProjects, setSelectedPeriodProjects] = useState<ProjectRow[]>([]);
   const [categoryComparison, setCategoryComparison] = useState<CategoryComparison | null>(null);
   const [fuelVehicles, setFuelVehicles] = useState<FuelVehicle[]>([]);
+  const [fuelVehicleManagerOpen, setFuelVehicleManagerOpen] = useState(false);
+  const [fuelVehicleDraft, setFuelVehicleDraft] = useState<FuelVehicleDraft>(emptyFuelVehicleDraft);
+  const [editingFuelVehicleId, setEditingFuelVehicleId] = useState<string | null>(null);
   const [selectedFuelVehicleId, setSelectedFuelVehicleId] = useState("");
   const [fuelEntries, setFuelEntries] = useState<FuelEntry[]>([]);
   const [fuelDraft, setFuelDraft] = useState<FuelDraft>(emptyFuelDraft);
@@ -1515,6 +1537,56 @@ export default function Home() {
       setFuelDraft((current) => ({ ...current, vehicle_id: current.vehicle_id || nextSelected }));
       await loadFuelEntries(nextSelected);
     }
+  }
+
+  async function saveFuelVehicle(event: FormEvent) {
+    event.preventDefault();
+    if (!fuelVehicleDraft.name.trim()) {
+      setMessage("Zadejte nazev vozidla.");
+      return;
+    }
+    const payload = {
+      name: fuelVehicleDraft.name.trim(),
+      vehicle_type: fuelVehicleDraft.vehicle_type || null,
+      license_plate: fuelVehicleDraft.license_plate || null,
+      initial_odometer_km: fuelVehicleDraft.initial_odometer_km || null,
+      is_active: fuelVehicleDraft.is_active
+    };
+    const response = await apiFetch(editingFuelVehicleId ? `/fuel/vehicles/${editingFuelVehicleId}` : "/fuel/vehicles", {
+      method: editingFuelVehicleId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    let result: any = null;
+    try {
+      result = await response.json();
+    } catch {
+      result = null;
+    }
+    if (!response.ok) {
+      setMessage(result?.detail || (editingFuelVehicleId ? "Vozidlo se nepodarilo upravit." : "Vozidlo se nepodarilo pridat."));
+      return;
+    }
+    setMessage(editingFuelVehicleId ? "Vozidlo upraveno." : "Vozidlo pridano.");
+    setEditingFuelVehicleId(null);
+    setFuelVehicleDraft(emptyFuelVehicleDraft);
+    await loadFuelVehicles();
+  }
+
+  function editFuelVehicleRow(vehicle: FuelVehicle) {
+    setEditingFuelVehicleId(vehicle.id);
+    setFuelVehicleDraft({
+      name: vehicle.name,
+      vehicle_type: vehicle.vehicle_type ?? "",
+      license_plate: vehicle.license_plate ?? "",
+      initial_odometer_km: vehicle.initial_odometer_km ?? "",
+      is_active: vehicle.is_active
+    });
+  }
+
+  function cancelFuelVehicleEdit() {
+    setEditingFuelVehicleId(null);
+    setFuelVehicleDraft(emptyFuelVehicleDraft);
   }
 
   async function loadFuelEntries(vehicleId = selectedFuelVehicleId) {
@@ -2948,12 +3020,56 @@ export default function Home() {
                 <p className="muted">Vozidla, tankovani, fotky uctenek a mesicni/rocni mezisoucty.</p>
               </div>
               <div className="actions">
+                {currentUser?.role === "admin" && (
+                  <button type="button" className="secondary" onClick={() => setFuelVehicleManagerOpen((current) => !current)}>
+                    <Briefcase size={18} /> {fuelVehicleManagerOpen ? "Skryt evidenci vozidel" : "Evidence vozidel"}
+                  </button>
+                )}
                 <button type="button" className="secondary" onClick={() => setFuelStatsOpen((current) => !current)}>
                   <BarChart3 size={18} /> {fuelStatsOpen ? "Skryt statistiku" : "Statistika spotreby"}
                 </button>
                 <Fuel size={18} />
               </div>
             </div>
+
+            {fuelVehicleManagerOpen && currentUser?.role === "admin" && (
+              <div className="chartPanel">
+                <div className="tableWrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Nazev</th><th>Typ</th><th>RZ</th><th className="num">Pocatecni stav km</th><th>Aktivni</th><th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fuelVehicles.map((vehicle) => (
+                        <tr key={vehicle.id}>
+                          <td>{vehicle.name}</td>
+                          <td>{vehicle.vehicle_type}</td>
+                          <td>{vehicle.license_plate}</td>
+                          <td className="num">{formatKm(vehicle.initial_odometer_km)}</td>
+                          <td>{formatBool(vehicle.is_active)}</td>
+                          <td className="rowActions">
+                            <button className="iconButton secondary" onClick={() => editFuelVehicleRow(vehicle)} title="Upravit vozidlo"><Edit3 size={16} /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <form className="gridForm" onSubmit={saveFuelVehicle}>
+                  <label>Nazev<input value={fuelVehicleDraft.name} onChange={(e) => setFuelVehicleDraft({ ...fuelVehicleDraft, name: e.target.value })} /></label>
+                  <label>Typ<input value={fuelVehicleDraft.vehicle_type} onChange={(e) => setFuelVehicleDraft({ ...fuelVehicleDraft, vehicle_type: e.target.value })} /></label>
+                  <label>RZ<input value={fuelVehicleDraft.license_plate} onChange={(e) => setFuelVehicleDraft({ ...fuelVehicleDraft, license_plate: e.target.value })} /></label>
+                  <label>Pocatecni stav km<input type="number" step="1" value={fuelVehicleDraft.initial_odometer_km} onChange={(e) => setFuelVehicleDraft({ ...fuelVehicleDraft, initial_odometer_km: e.target.value })} /></label>
+                  <label className="checkLabel"><input type="checkbox" checked={fuelVehicleDraft.is_active} onChange={(e) => setFuelVehicleDraft({ ...fuelVehicleDraft, is_active: e.target.checked })} /> Aktivni</label>
+                  <div className="actions">
+                    <button type="submit"><Save size={18} /> {editingFuelVehicleId ? "Ulozit zmeny" : "Pridat vozidlo"}</button>
+                    {editingFuelVehicleId && <button type="button" className="secondary" onClick={cancelFuelVehicleEdit}><X size={18} /> Zrusit</button>}
+                  </div>
+                </form>
+              </div>
+            )}
 
             <div className="vehicleTabs">
               {fuelVehicles.map((vehicle) => (

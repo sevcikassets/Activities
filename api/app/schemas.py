@@ -189,8 +189,27 @@ class FuelVehicleOut(BaseModel):
     id: UUID
     code: str
     name: str
+    vehicle_type: str | None
+    license_plate: str | None
+    initial_odometer_km: Decimal | None
     is_active: bool
     sort_order: int
+
+
+class FuelVehicleCreate(BaseModel):
+    name: str
+    vehicle_type: str | None = None
+    license_plate: str | None = None
+    initial_odometer_km: Decimal | None = None
+    is_active: bool = True
+
+
+class FuelVehicleUpdate(BaseModel):
+    name: str | None = None
+    vehicle_type: str | None = None
+    license_plate: str | None = None
+    initial_odometer_km: Decimal | None = None
+    is_active: bool | None = None
 
 
 class FuelEntryBase(BaseModel):

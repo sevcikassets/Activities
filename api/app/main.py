@@ -28,6 +28,7 @@ from app.repository import (
     category_comparison,
     category_period_summary,
     create_fuel_entry,
+    create_fuel_vehicle,
     create_project,
     create_time_entry,
     create_weight_entry,
@@ -55,6 +56,7 @@ from app.repository import (
     seed_fuel_vehicles,
     unapprove_time_entry,
     update_fuel_entry,
+    update_fuel_vehicle,
     update_project,
     update_time_entry,
     update_weight_entry,
@@ -72,7 +74,9 @@ from app.schemas import (
     FuelImportResponse,
     FuelPhotoParseResponse,
     FuelSummaryRow,
+    FuelVehicleCreate,
     FuelVehicleOut,
+    FuelVehicleUpdate,
     LoginRequest,
     LoginResponse,
     OverheadTicketOut,
@@ -224,6 +228,19 @@ def serialize_entry(entry: models.TimeEntry) -> TimeEntryOut:
         km=entry.km,
         reported_status=entry.reported_status,
         approved_on=entry.approved_at.date() if entry.approved_at else None,
+    )
+
+
+def serialize_fuel_vehicle(vehicle: models.FuelVehicle) -> FuelVehicleOut:
+    return FuelVehicleOut(
+        id=vehicle.id,
+        code=vehicle.code,
+        name=vehicle.name,
+        vehicle_type=vehicle.vehicle_type,
+        license_plate=vehicle.license_plate,
+        initial_odometer_km=vehicle.initial_odometer_km,
+        is_active=vehicle.is_active,
+        sort_order=vehicle.sort_order,
     )
 
 
@@ -631,16 +648,36 @@ def get_fuel_vehicles(
     db: Session = Depends(get_db),
     _user: AuthUser = Depends(require_user),
 ) -> list[FuelVehicleOut]:
-    return [
-        FuelVehicleOut(
-            id=vehicle.id,
-            code=vehicle.code,
-            name=vehicle.name,
-            is_active=vehicle.is_active,
-            sort_order=vehicle.sort_order,
-        )
-        for vehicle in list_fuel_vehicles(db)
-    ]
+    return [serialize_fuel_vehicle(vehicle) for vehicle in list_fuel_vehicles(db)]
+
+
+@app.post("/fuel/vehicles", response_model=FuelVehicleOut)
+def add_fuel_vehicle(
+    payload: FuelVehicleCreate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_admin),
+) -> FuelVehicleOut:
+    try:
+        vehicle = create_fuel_vehicle(db, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return serialize_fuel_vehicle(vehicle)
+
+
+@app.put("/fuel/vehicles/{vehicle_id}", response_model=FuelVehicleOut)
+def edit_fuel_vehicle(
+    vehicle_id: UUID,
+    payload: FuelVehicleUpdate,
+    db: Session = Depends(get_db),
+    _user: AuthUser = Depends(require_admin),
+) -> FuelVehicleOut:
+    try:
+        vehicle = update_fuel_vehicle(db, vehicle_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found.")
+    return serialize_fuel_vehicle(vehicle)
 
 
 @app.get("/fuel/entries", response_model=list[FuelEntryOut])
